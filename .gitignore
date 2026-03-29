@@ -1,0 +1,57 @@
+# Build output
+target/
+.mule/
+.idea/
+*.iml
+.DS_Store
+*.class
+*.jar
+*.log
+.env
+local-*.properties
+*.ps1
+
+# Mule runtime
+.mule/
+
+# IDE files
+.idea/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Compiled files
+*.class
+
+# JAR files (except those in lib/)
+*.jar
+!lib/**/*.jar
+
+# Log files
+*.log
+logs/
+
+# Environment and secrets
+.env
+.env.*
+local-*.properties
+
+# Maven wrapper (optional, depends on team preference)
+!.mvn/wrapper/maven-wrapper.jar
+
+# Exchange documentation artifacts
+exchange_modules/
+
+*.ps1
