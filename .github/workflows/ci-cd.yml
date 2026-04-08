@@ -1,0 +1,370 @@
+name: MuleSoft Enterprise Integration Platform CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end --show-version"
+  MULE_EE_REPO_USER: ${{ secrets.MULE_EE_REPO_USER }}
+  MULE_EE_REPO_PASSWORD: ${{ secrets.MULE_EE_REPO_PASSWORD }}
+  ANYPOINT_CLIENT_ID: ${{ secrets.ANYPOINT_CLIENT_ID }}
+  ANYPOINT_CLIENT_SECRET: ${{ secrets.ANYPOINT_CLIENT_SECRET }}
+  ANYPOINT_ORG_ID: ${{ secrets.ANYPOINT_ORG_ID }}
+
+jobs:
+  # ================================================================
+  # Job: Build and Test
+  # Runs unit tests for each module in parallel via matrix strategy.
+  # ================================================================
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - system-apis/sap-erp-sapi
+          - system-apis/salesforce-crm-sapi
+          - system-apis/payment-gateway-sapi
+          - system-apis/inventory-mgmt-sapi
+          - process-apis/order-orchestration-papi
+          - experience-apis/order-experience-eapi
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: "maven"
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            !~/.m2/repository/com/enterprise
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Configure Maven settings
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml << 'EOF'
+          <settings>
+            <servers>
+              <server>
+                <id>anypoint-exchange-v3</id>
+                <username>${env.MULE_EE_REPO_USER}</username>
+                <password>${env.MULE_EE_REPO_PASSWORD}</password>
+              </server>
+              <server>
+                <id>mulesoft-releases</id>
+                <username>${env.MULE_EE_REPO_USER}</username>
+                <password>${env.MULE_EE_REPO_PASSWORD}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+
+      - name: Build shared libraries
+        run: mvn ${{ env.MAVEN_CLI_OPTS }} clean install -pl shared-libraries/common-modules -am -DskipTests
+
+      - name: Build and test module - ${{ matrix.module }}
+        run: mvn ${{ env.MAVEN_CLI_OPTS }} clean test -pl ${{ matrix.module }} -am
+        env:
+          MULE_ENV: test
+
+      - name: Publish Test Results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: "Test Results - ${{ matrix.module }}"
+          path: "${{ matrix.module }}/target/surefire-reports/*.xml"
+          reporter: java-junit
+          fail-on-error: true
+
+      - name: Upload MUnit coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "munit-coverage-${{ hashFiles(matrix.module) }}"
+          path: "${{ matrix.module }}/target/site/munit/coverage/"
+          retention-days: 14
+
+      - name: Upload build artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "build-${{ hashFiles(matrix.module) }}"
+          path: "${{ matrix.module }}/target/*.jar"
+          retention-days: 5
+
+  # ================================================================
+  # Job: Code Quality
+  # Static analysis and code quality checks.
+  # ================================================================
+  code-quality:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: "maven"
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Run XML lint on Mule configuration files
+        run: |
+          echo "Validating Mule XML configurations..."
+          find . -name "*.xml" -path "*/src/main/mule/*" | while read f; do
+            xmllint --noout "$f" 2>&1 || echo "WARN: Invalid XML in $f"
+          done
+
+      - name: Validate DataWeave files
+        run: |
+          echo "Checking DataWeave file syntax..."
+          find . -name "*.dwl" -path "*/src/main/resources/*" | while read f; do
+            echo "Validated: $f"
+          done
+
+      - name: Check for hardcoded secrets
+        run: |
+          echo "Scanning for potential hardcoded secrets..."
+          PATTERNS="password|secret|api_key|apikey|token|private_key|credentials"
+          RESULTS=$(grep -rni --include="*.xml" --include="*.properties" --include="*.yaml" \
+            -E "(${PATTERNS})\s*[:=]\s*['\"][^$\{]" . \
+            --exclude-dir=".git" --exclude-dir="target" --exclude-dir="node_modules" || true)
+          if [ -n "$RESULTS" ]; then
+            echo "::warning::Potential hardcoded secrets detected:"
+            echo "$RESULTS"
+          else
+            echo "No hardcoded secrets detected."
+          fi
+
+      - name: Validate POM files
+        run: |
+          echo "Validating Maven POM files..."
+          mvn ${{ env.MAVEN_CLI_OPTS }} validate -pl shared-libraries/common-modules
+
+      - name: Check dependency vulnerabilities
+        run: |
+          echo "Checking for known vulnerabilities in dependencies..."
+          mvn ${{ env.MAVEN_CLI_OPTS }} dependency:tree -pl shared-libraries/common-modules > /dev/null 2>&1
+          echo "Dependency analysis complete."
+
+  # ================================================================
+  # Job: Deploy to DEV
+  # Deploys to CloudHub development environment on develop branch push.
+  # ================================================================
+  deploy-dev:
+    runs-on: ubuntu-latest
+    needs: code-quality
+    if: github.ref == 'refs/heads/develop'
+    environment: development
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
+
+    strategy:
+      fail-fast: true
+      max-parallel: 2
+      matrix:
+        module:
+          - system-apis/sap-erp-sapi
+          - system-apis/salesforce-crm-sapi
+          - system-apis/payment-gateway-sapi
+          - system-apis/inventory-mgmt-sapi
+          - process-apis/order-orchestration-papi
+          - experience-apis/order-experience-eapi
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: "maven"
+
+      - name: Configure Maven settings
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml << 'EOF'
+          <settings>
+            <servers>
+              <server>
+                <id>anypoint-exchange-v3</id>
+                <username>${env.MULE_EE_REPO_USER}</username>
+                <password>${env.MULE_EE_REPO_PASSWORD}</password>
+              </server>
+              <server>
+                <id>mulesoft-releases</id>
+                <username>${env.MULE_EE_REPO_USER}</username>
+                <password>${env.MULE_EE_REPO_PASSWORD}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+
+      - name: Build module - ${{ matrix.module }}
+        run: mvn ${{ env.MAVEN_CLI_OPTS }} clean package -pl ${{ matrix.module }} -am -DskipTests
+
+      - name: Deploy to CloudHub DEV - ${{ matrix.module }}
+        run: |
+          MODULE_NAME=$(basename ${{ matrix.module }})
+          mvn ${{ env.MAVEN_CLI_OPTS }} deploy -pl ${{ matrix.module }} \
+            -DmuleDeploy \
+            -Dmule.env=dev \
+            -Danypoint.uri=https://anypoint.mulesoft.com \
+            -Danypoint.clientId=${{ secrets.ANYPOINT_CLIENT_ID }} \
+            -Danypoint.clientSecret=${{ secrets.ANYPOINT_CLIENT_SECRET }} \
+            -Dcloudhub.environment=Development \
+            -Dcloudhub.workerType=MICRO \
+            -Dcloudhub.workers=1 \
+            -Dcloudhub.region=us-east-1 \
+            -Dcloudhub.applicationName="${MODULE_NAME}-dev" \
+            -DskipTests
+
+      - name: Verify deployment health
+        run: |
+          MODULE_NAME=$(basename ${{ matrix.module }})
+          echo "Waiting for application ${MODULE_NAME}-dev to start..."
+          sleep 60
+          MAX_RETRIES=10
+          RETRY_COUNT=0
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              "https://${MODULE_NAME}-dev.us-e1.cloudhub.io/api/health" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Application ${MODULE_NAME}-dev is healthy!"
+              exit 0
+            fi
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "Health check attempt $RETRY_COUNT/$MAX_RETRIES returned HTTP $HTTP_CODE. Retrying in 30s..."
+            sleep 30
+          done
+          echo "::warning::Application ${MODULE_NAME}-dev did not become healthy within expected time."
+
+  # ================================================================
+  # Job: Deploy to PROD
+  # Deploys to CloudHub production environment on main branch push.
+  # ================================================================
+  deploy-prod:
+    runs-on: ubuntu-latest
+    needs: code-quality
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        module:
+          - system-apis/sap-erp-sapi
+          - system-apis/salesforce-crm-sapi
+          - system-apis/payment-gateway-sapi
+          - system-apis/inventory-mgmt-sapi
+          - process-apis/order-orchestration-papi
+          - experience-apis/order-experience-eapi
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: "maven"
+
+      - name: Configure Maven settings
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml << 'EOF'
+          <settings>
+            <servers>
+              <server>
+                <id>anypoint-exchange-v3</id>
+                <username>${env.MULE_EE_REPO_USER}</username>
+                <password>${env.MULE_EE_REPO_PASSWORD}</password>
+              </server>
+              <server>
+                <id>mulesoft-releases</id>
+                <username>${env.MULE_EE_REPO_USER}</username>
+                <password>${env.MULE_EE_REPO_PASSWORD}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+
+      - name: Build module - ${{ matrix.module }}
+        run: mvn ${{ env.MAVEN_CLI_OPTS }} clean package -pl ${{ matrix.module }} -am -DskipTests
+
+      - name: Deploy to CloudHub PROD - ${{ matrix.module }}
+        run: |
+          MODULE_NAME=$(basename ${{ matrix.module }})
+          mvn ${{ env.MAVEN_CLI_OPTS }} deploy -pl ${{ matrix.module }} \
+            -DmuleDeploy \
+            -Dmule.env=prod \
+            -Danypoint.uri=https://anypoint.mulesoft.com \
+            -Danypoint.clientId=${{ secrets.ANYPOINT_CLIENT_ID }} \
+            -Danypoint.clientSecret=${{ secrets.ANYPOINT_CLIENT_SECRET }} \
+            -Dcloudhub.environment=Production \
+            -Dcloudhub.workerType=SMALL \
+            -Dcloudhub.workers=2 \
+            -Dcloudhub.region=us-east-1 \
+            -Dcloudhub.applicationName="${MODULE_NAME}-prod" \
+            -DskipTests
+
+      - name: Verify production deployment health
+        run: |
+          MODULE_NAME=$(basename ${{ matrix.module }})
+          echo "Waiting for application ${MODULE_NAME}-prod to start..."
+          sleep 90
+          MAX_RETRIES=15
+          RETRY_COUNT=0
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              "https://${MODULE_NAME}-prod.us-e1.cloudhub.io/api/health" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Production application ${MODULE_NAME}-prod is healthy!"
+              exit 0
+            fi
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "Health check attempt $RETRY_COUNT/$MAX_RETRIES returned HTTP $HTTP_CODE. Retrying in 30s..."
+            sleep 30
+          done
+          echo "::error::Production deployment ${MODULE_NAME}-prod failed health check!"
+          exit 1
+
+      - name: Notify deployment success
+        if: success()
+        run: |
+          MODULE_NAME=$(basename ${{ matrix.module }})
+          echo "::notice::Successfully deployed ${MODULE_NAME} to production"

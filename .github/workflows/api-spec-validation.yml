@@ -1,0 +1,118 @@
+name: API Specification Validation
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "**/*.raml"
+      - "**/api-spec/**"
+      - "**/api/**"
+
+jobs:
+  validate-raml:
+    runs-on: ubuntu-latest
+    name: Validate RAML Specifications
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install RAML parser
+        run: npm install -g @anypoint/raml-1-parser webapi-parser
+
+      - name: Find all RAML files
+        id: find-raml
+        run: |
+          RAML_FILES=$(find . -name "*.raml" -path "*/api-spec/*" -o -name "*.raml" -path "*/api/*" | sort)
+          echo "Found RAML files:"
+          echo "$RAML_FILES"
+          echo "raml_files<<EOF" >> $GITHUB_OUTPUT
+          echo "$RAML_FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Validate RAML specifications
+        run: |
+          EXIT_CODE=0
+          echo "## RAML Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+
+          find . -name "*.raml" \( -path "*/api-spec/*" -o -path "*/api/*" \) | while read raml_file; do
+            echo "Validating: $raml_file"
+
+            # Basic RAML structure validation
+            FIRST_LINE=$(head -1 "$raml_file")
+            if [[ "$FIRST_LINE" != "#%RAML 1.0"* ]]; then
+              echo "::error file=${raml_file}::Invalid RAML header. Expected '#%RAML 1.0', got '${FIRST_LINE}'"
+              echo "| \`${raml_file}\` | :x: FAIL | Invalid RAML header |" >> $GITHUB_STEP_SUMMARY
+              EXIT_CODE=1
+              continue
+            fi
+
+            # Check for required fields in API specs
+            if [[ "$raml_file" == *".raml" ]] && ! grep -q "title:" "$raml_file"; then
+              echo "::warning file=${raml_file}::Missing 'title' field in RAML specification"
+              echo "| \`${raml_file}\` | :warning: WARN | Missing title field |" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            if [[ "$raml_file" == *".raml" ]] && ! grep -q "version:" "$raml_file"; then
+              echo "::warning file=${raml_file}::Missing 'version' field in RAML specification"
+              echo "| \`${raml_file}\` | :warning: WARN | Missing version field |" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # Validate YAML syntax
+            python3 -c "
+          import yaml, sys
+          try:
+              # Remove RAML header for YAML parsing
+              with open('$raml_file', 'r') as f:
+                  content = f.read()
+              lines = content.split('\n')
+              yaml_content = '\n'.join(lines[1:])
+              yaml.safe_load(yaml_content)
+              print('YAML syntax valid: $raml_file')
+          except yaml.YAMLError as e:
+              print(f'YAML error in $raml_file: {e}', file=sys.stderr)
+              sys.exit(1)
+          " 2>&1 || {
+              echo "::error file=${raml_file}::YAML syntax error in RAML file"
+              echo "| \`${raml_file}\` | :x: FAIL | YAML syntax error |" >> $GITHUB_STEP_SUMMARY
+              EXIT_CODE=1
+              continue
+            }
+
+            echo "| \`${raml_file}\` | :white_check_mark: PASS | Valid |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          exit $EXIT_CODE
+
+      - name: Check RAML best practices
+        if: always()
+        run: |
+          echo "## RAML Best Practices Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          WARNINGS=0
+
+          # Check for description in API specs
+          find . -name "*.raml" \( -path "*/api-spec/*" -o -path "*/api/*" \) | while read raml_file; do
+            if ! grep -q "description:" "$raml_file"; then
+              echo "::notice file=${raml_file}::Consider adding descriptions to improve API documentation"
+              WARNINGS=$((WARNINGS + 1))
+            fi
+
+            # Check for examples in data types
+            if grep -q "types:" "$raml_file" && ! grep -q "example:" "$raml_file"; then
+              echo "::notice file=${raml_file}::Consider adding examples to data types for better documentation"
+              WARNINGS=$((WARNINGS + 1))
+            fi
+          done
+
+          echo "Best practices check complete. $WARNINGS notices generated." >> $GITHUB_STEP_SUMMARY

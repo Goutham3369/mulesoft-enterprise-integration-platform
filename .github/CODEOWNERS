@@ -1,0 +1,45 @@
+# ============================================================
+# CODEOWNERS - MuleSoft Enterprise Integration Platform
+# ============================================================
+# This file defines code ownership for automated review routing.
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# ============================================================
+
+# Global owners — fallback for any unmatched path
+*                                               @platform-team @tech-leads
+
+# ---- Shared Libraries ----
+/shared-libraries/                              @platform-team @integration-architects
+
+# ---- System APIs ----
+/system-apis/sap-erp-sapi/                      @erp-team @platform-team
+/system-apis/salesforce-crm-sapi/               @crm-team @platform-team
+/system-apis/payment-gateway-sapi/              @payments-team @platform-team @security-team
+/system-apis/inventory-mgmt-sapi/               @supply-chain-team @platform-team
+
+# ---- Process APIs ----
+/process-apis/order-orchestration-papi/         @order-management-team @integration-architects
+
+# ---- Experience APIs ----
+/experience-apis/order-experience-eapi/         @frontend-team @api-designers
+
+# ---- API Specifications (RAML) ----
+**/api-spec/**                                  @api-designers @integration-architects
+**/*.raml                                       @api-designers @integration-architects
+
+# ---- Infrastructure & DevOps ----
+/.github/                                       @devops-team @platform-team
+/docker-compose.yml                             @devops-team
+/docker/                                        @devops-team
+/monitoring/                                    @sre-team @devops-team
+
+# ---- Security-sensitive files ----
+**/common-security.xml                          @security-team @platform-team
+**/*secret*                                     @security-team
+**/*credential*                                 @security-team
+**/secure-properties/**                         @security-team @platform-team
+
+# ---- Configuration ----
+**/*.properties                                 @platform-team
+**/*.yaml                                       @platform-team
+**/pom.xml                                      @platform-team @tech-leads
