@@ -1,0 +1,222 @@
+#%RAML 1.0 Trait
+
+usage: Apply to all endpoints to define standard error response codes
+
+responses:
+  400:
+    description: Bad Request - the request payload is malformed or contains invalid data
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "VAL-40000",
+            "message": "Request validation failed: one or more fields contain invalid values",
+            "details": [
+              {
+                "field": "orderItems[0].quantity",
+                "code": "INVALID_VALUE",
+                "message": "Quantity must be a positive integer",
+                "rejectedValue": "-1"
+              },
+              {
+                "field": "customerEmail",
+                "code": "INVALID_FORMAT",
+                "message": "Email address format is invalid",
+                "rejectedValue": "not-an-email"
+              }
+            ],
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders",
+            "httpStatus": 400,
+            "retryable": false
+          }
+  404:
+    description: Not Found - the requested resource does not exist
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "RES-40400",
+            "message": "Resource not found: no order exists with the specified identifier",
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders/ORD-NONEXISTENT",
+            "httpStatus": 404,
+            "retryable": false
+          }
+  405:
+    description: Method Not Allowed - the HTTP method is not supported for this resource
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "SYS-40500",
+            "message": "HTTP method not allowed for this resource",
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders",
+            "httpStatus": 405,
+            "retryable": false
+          }
+  406:
+    description: Not Acceptable - the requested media type is not supported
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "SYS-40600",
+            "message": "Requested media type is not supported. Supported types: application/json",
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders",
+            "httpStatus": 406,
+            "retryable": false
+          }
+  409:
+    description: Conflict - the request conflicts with the current state of the resource
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "BIZ-40900",
+            "message": "Conflict: order has already been cancelled and cannot be modified",
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders/ORD-2024-0115-78432",
+            "httpStatus": 409,
+            "retryable": false
+          }
+  415:
+    description: Unsupported Media Type - the request content type is not supported
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "SYS-41500",
+            "message": "Unsupported media type. Expected: application/json",
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders",
+            "httpStatus": 415,
+            "retryable": false
+          }
+  422:
+    description: Unprocessable Entity - the request is syntactically valid but semantically incorrect
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "BIZ-42200",
+            "message": "Business rule violation: order total exceeds customer credit limit",
+            "details": [
+              {
+                "field": "totalAmount",
+                "code": "CREDIT_LIMIT_EXCEEDED",
+                "message": "Order total of $150,000.00 exceeds the customer credit limit of $100,000.00",
+                "rejectedValue": "150000.00"
+              }
+            ],
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders",
+            "httpStatus": 422,
+            "retryable": false
+          }
+  429:
+    description: Too Many Requests - rate limit has been exceeded
+    headers:
+      Retry-After:
+        type: integer
+        description: Number of seconds to wait before retrying
+        example: 60
+      X-RateLimit-Limit:
+        type: integer
+        description: Maximum number of requests allowed per window
+        example: 1000
+      X-RateLimit-Remaining:
+        type: integer
+        description: Number of requests remaining in the current window
+        example: 0
+      X-RateLimit-Reset:
+        type: integer
+        description: Unix timestamp when the rate limit window resets
+        example: 1705329600
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "SYS-42900",
+            "message": "Rate limit exceeded. Please retry after 60 seconds",
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders",
+            "httpStatus": 429,
+            "retryable": true,
+            "retryAfterSeconds": 60
+          }
+  500:
+    description: Internal Server Error - an unexpected error occurred
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "SYS-50000",
+            "message": "An unexpected internal error occurred. Please contact support if the issue persists.",
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders",
+            "httpStatus": 500,
+            "retryable": true,
+            "retryAfterSeconds": 30
+          }
+  502:
+    description: Bad Gateway - a downstream service returned an invalid response
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "SYS-50200",
+            "message": "Downstream service returned an invalid response",
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders",
+            "httpStatus": 502,
+            "retryable": true,
+            "retryAfterSeconds": 15
+          }
+  503:
+    description: Service Unavailable - the service is temporarily unavailable
+    headers:
+      Retry-After:
+        type: integer
+        description: Number of seconds to wait before retrying
+        example: 30
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "SYS-50300",
+            "message": "Service temporarily unavailable. Please retry after the indicated time.",
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders",
+            "httpStatus": 503,
+            "retryable": true,
+            "retryAfterSeconds": 30
+          }
+  504:
+    description: Gateway Timeout - a downstream service did not respond in time
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "SYS-50400",
+            "message": "Request timed out waiting for downstream service response",
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders",
+            "httpStatus": 504,
+            "retryable": true,
+            "retryAfterSeconds": 10
+          }

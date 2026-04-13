@@ -1,0 +1,59 @@
+#%RAML 1.0 Trait
+
+usage: Apply to endpoints requiring authentication and authorization
+
+headers:
+  Authorization:
+    type: string
+    description: Bearer token or API key for authentication
+    required: true
+    example: "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+  X-Client-Id:
+    type: string
+    description: Client application identifier for rate limiting and tracking
+    required: true
+    example: "client-order-portal-prod"
+  X-Client-Secret:
+    type: string
+    description: Client secret for additional authentication when required
+    required: false
+  X-Correlation-Id:
+    type: string
+    description: Unique correlation ID for distributed tracing across services
+    required: false
+    example: "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  X-Request-Id:
+    type: string
+    description: Unique request identifier for idempotency and deduplication
+    required: false
+    example: "req-f7e8d9c0-b1a2-3456-7890-abcdef123456"
+
+responses:
+  401:
+    description: Authentication failed - invalid or missing credentials
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "AUTH-40100",
+            "message": "Authentication failed: invalid or expired access token",
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders",
+            "httpStatus": 401,
+            "retryable": false
+          }
+  403:
+    description: Authorization failed - insufficient permissions
+    body:
+      application/json:
+        example: |
+          {
+            "errorCode": "AUTH-40300",
+            "message": "Authorization failed: insufficient permissions to access this resource",
+            "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "timestamp": "2024-01-15T14:30:00.000Z",
+            "path": "/api/v1/orders",
+            "httpStatus": 403,
+            "retryable": false
+          }

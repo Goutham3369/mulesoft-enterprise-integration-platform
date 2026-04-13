@@ -1,0 +1,334 @@
+#%RAML 1.0 Library
+
+usage: Order-related data types for the enterprise integration platform
+
+types:
+  OrderStatus:
+    type: string
+    description: Current status of an order in the fulfillment lifecycle
+    enum:
+      - DRAFT
+      - PENDING_VALIDATION
+      - VALIDATED
+      - PENDING_PAYMENT
+      - PAYMENT_AUTHORIZED
+      - PAYMENT_CAPTURED
+      - PENDING_FULFILLMENT
+      - IN_FULFILLMENT
+      - PARTIALLY_SHIPPED
+      - SHIPPED
+      - DELIVERED
+      - CANCELLED
+      - REFUNDED
+      - ON_HOLD
+      - FAILED
+
+  ShippingAddress:
+    type: object
+    description: Physical shipping destination for an order
+    properties:
+      addressLine1:
+        type: string
+        description: Primary street address
+        maxLength: 255
+        example: "123 Commerce Street"
+      addressLine2?:
+        type: string
+        description: Secondary address line (apartment, suite, etc.)
+        maxLength: 255
+        example: "Suite 400"
+      city:
+        type: string
+        description: City name
+        maxLength: 100
+        example: "San Francisco"
+      stateProvince:
+        type: string
+        description: State or province code
+        maxLength: 50
+        example: "CA"
+      postalCode:
+        type: string
+        description: Postal or ZIP code
+        pattern: "^[A-Za-z0-9\\- ]{3,10}$"
+        example: "94105"
+      countryCode:
+        type: string
+        description: ISO 3166-1 alpha-2 country code
+        pattern: "^[A-Z]{2}$"
+        example: "US"
+      recipientName:
+        type: string
+        description: Name of the person receiving the shipment
+        maxLength: 200
+        example: "Jane Doe"
+      recipientPhone?:
+        type: string
+        description: Contact phone number for delivery
+        maxLength: 20
+        example: "+1-415-555-0198"
+      deliveryInstructions?:
+        type: string
+        description: Special delivery instructions
+        maxLength: 500
+        example: "Leave at front desk if no one answers"
+      isResidential?:
+        type: boolean
+        description: Whether this is a residential address
+        default: true
+
+  BillingAddress:
+    type: object
+    description: Billing address associated with the payment method
+    properties:
+      addressLine1:
+        type: string
+        maxLength: 255
+        example: "456 Financial Ave"
+      addressLine2?:
+        type: string
+        maxLength: 255
+        example: "Floor 12"
+      city:
+        type: string
+        maxLength: 100
+        example: "New York"
+      stateProvince:
+        type: string
+        maxLength: 50
+        example: "NY"
+      postalCode:
+        type: string
+        pattern: "^[A-Za-z0-9\\- ]{3,10}$"
+        example: "10001"
+      countryCode:
+        type: string
+        pattern: "^[A-Z]{2}$"
+        example: "US"
+      billingName:
+        type: string
+        description: Name as it appears on the billing account
+        maxLength: 200
+        example: "Acme Corporation"
+      taxId?:
+        type: string
+        description: Tax identification number
+        maxLength: 50
+        example: "TAX-12345678"
+
+  OrderItem:
+    type: object
+    description: Individual line item within an order
+    properties:
+      lineItemId:
+        type: string
+        description: Unique identifier for this line item
+        example: "LI-20240115-001"
+      productId:
+        type: string
+        description: Reference to the product catalog
+        example: "PROD-SKU-78432"
+      productName:
+        type: string
+        description: Human-readable product name
+        maxLength: 300
+        example: "Enterprise Widget Pro X500"
+      sku:
+        type: string
+        description: Stock keeping unit code
+        maxLength: 50
+        example: "WDG-PRO-X500-BLK"
+      quantity:
+        type: integer
+        description: Number of units ordered
+        minimum: 1
+        maximum: 99999
+        example: 3
+      unitPrice:
+        type: number
+        format: double
+        description: Price per unit before discounts
+        minimum: 0
+        example: 149.99
+      discountAmount?:
+        type: number
+        format: double
+        description: Total discount applied to this line item
+        minimum: 0
+        default: 0
+        example: 15.00
+      discountPercent?:
+        type: number
+        format: double
+        description: Discount percentage applied
+        minimum: 0
+        maximum: 100
+        example: 10.0
+      taxAmount:
+        type: number
+        format: double
+        description: Tax amount for this line item
+        minimum: 0
+        example: 36.45
+      taxRate:
+        type: number
+        format: double
+        description: Tax rate applied as a percentage
+        minimum: 0
+        maximum: 100
+        example: 8.875
+      totalAmount:
+        type: number
+        format: double
+        description: Total amount for this line item (quantity * unitPrice - discount + tax)
+        minimum: 0
+        example: 471.42
+      currency:
+        type: string
+        description: ISO 4217 currency code
+        pattern: "^[A-Z]{3}$"
+        default: "USD"
+        example: "USD"
+      status:
+        type: string
+        description: Status of this specific line item
+        enum: [PENDING, CONFIRMED, BACKORDERED, SHIPPED, DELIVERED, CANCELLED, RETURNED]
+        example: "CONFIRMED"
+      warehouseId?:
+        type: string
+        description: Warehouse fulfilling this line item
+        example: "WH-EAST-001"
+      estimatedDeliveryDate?:
+        type: date-only
+        description: Estimated delivery date for this item
+        example: "2024-02-15"
+
+  Order:
+    type: object
+    description: Complete order record representing a customer purchase transaction
+    properties:
+      orderId:
+        type: string
+        description: Globally unique order identifier
+        example: "ORD-2024-0115-78432"
+      externalOrderId?:
+        type: string
+        description: Order ID from the originating external system
+        example: "EXT-WEB-99281"
+      customerId:
+        type: string
+        description: Reference to the customer who placed the order
+        example: "CUST-00045821"
+      customerEmail:
+        type: string
+        description: Customer email for order communications
+        pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+        example: "jane.doe@example.com"
+      orderDate:
+        type: datetime
+        description: Timestamp when the order was placed
+        example: "2024-01-15T14:30:00.000Z"
+      status:
+        type: OrderStatus
+        description: Current order status
+        example: "PENDING_FULFILLMENT"
+      orderItems:
+        type: OrderItem[]
+        description: Collection of line items in this order
+        minItems: 1
+      shippingAddress:
+        type: ShippingAddress
+      billingAddress:
+        type: BillingAddress
+      subtotalAmount:
+        type: number
+        format: double
+        description: Sum of all line item amounts before shipping and order-level discounts
+        minimum: 0
+        example: 1414.26
+      shippingAmount:
+        type: number
+        format: double
+        description: Shipping and handling charges
+        minimum: 0
+        example: 12.99
+      taxAmount:
+        type: number
+        format: double
+        description: Total tax for the order
+        minimum: 0
+        example: 109.35
+      discountAmount?:
+        type: number
+        format: double
+        description: Order-level discount amount
+        minimum: 0
+        default: 0
+        example: 50.00
+      totalAmount:
+        type: number
+        format: double
+        description: Grand total for the order
+        minimum: 0
+        example: 1486.60
+      currency:
+        type: string
+        description: ISO 4217 currency code
+        pattern: "^[A-Z]{3}$"
+        default: "USD"
+        example: "USD"
+      paymentId?:
+        type: string
+        description: Reference to the payment transaction
+        example: "PAY-TXN-88123"
+      shippingMethod:
+        type: string
+        description: Selected shipping method
+        enum: [STANDARD, EXPRESS, OVERNIGHT, TWO_DAY, FREIGHT, PICKUP]
+        example: "EXPRESS"
+      trackingNumber?:
+        type: string
+        description: Carrier tracking number
+        example: "1Z999AA10123456784"
+      carrierName?:
+        type: string
+        description: Shipping carrier name
+        example: "UPS"
+      estimatedDeliveryDate?:
+        type: date-only
+        description: Estimated delivery date for the complete order
+        example: "2024-02-01"
+      specialInstructions?:
+        type: string
+        description: Special handling or delivery instructions
+        maxLength: 1000
+        example: "Gift wrap requested - include gift message"
+      channel:
+        type: string
+        description: Sales channel from which the order originated
+        enum: [WEB, MOBILE_APP, POS, PHONE, EDI, MARKETPLACE, B2B_PORTAL]
+        example: "WEB"
+      promotionCodes?:
+        type: string[]
+        description: Applied promotion or coupon codes
+        example: ["SAVE10", "FREESHIP"]
+      notes?:
+        type: string
+        description: Internal notes on the order
+        maxLength: 2000
+      sapOrderNumber?:
+        type: string
+        description: Corresponding SAP sales order number
+        example: "4500012345"
+      createdAt:
+        type: datetime
+        description: Record creation timestamp
+        example: "2024-01-15T14:30:00.000Z"
+      updatedAt:
+        type: datetime
+        description: Record last update timestamp
+        example: "2024-01-15T15:45:30.000Z"
+      createdBy?:
+        type: string
+        description: User or system that created the order
+        example: "system-api-gateway"

@@ -1,0 +1,250 @@
+#%RAML 1.0 Library
+
+usage: Common shared data types used across all APIs in the enterprise integration platform
+
+types:
+  Address:
+    type: object
+    description: Generic address structure used across the platform
+    properties:
+      addressLine1:
+        type: string
+        description: Primary street address
+        maxLength: 255
+        example: "100 Main Street"
+      addressLine2?:
+        type: string
+        description: Secondary address line
+        maxLength: 255
+        example: "Apt 4B"
+      city:
+        type: string
+        description: City name
+        maxLength: 100
+        example: "Springfield"
+      stateProvince:
+        type: string
+        description: State or province code
+        maxLength: 50
+        example: "IL"
+      postalCode:
+        type: string
+        description: Postal or ZIP code
+        pattern: "^[A-Za-z0-9\\- ]{3,10}$"
+        example: "62704"
+      countryCode:
+        type: string
+        description: ISO 3166-1 alpha-2 country code
+        pattern: "^[A-Z]{2}$"
+        example: "US"
+
+  AuditInfo:
+    type: object
+    description: Standard audit trail information attached to all mutable resources
+    properties:
+      createdAt:
+        type: datetime
+        description: Timestamp when the resource was created
+        example: "2024-01-15T14:30:00.000Z"
+      createdBy:
+        type: string
+        description: User or system identity that created the resource
+        maxLength: 200
+        example: "system-api-gateway"
+      updatedAt:
+        type: datetime
+        description: Timestamp when the resource was last updated
+        example: "2024-01-15T15:45:30.000Z"
+      updatedBy:
+        type: string
+        description: User or system identity that last updated the resource
+        maxLength: 200
+        example: "order-orchestration-papi"
+      version:
+        type: integer
+        description: Optimistic locking version number
+        minimum: 1
+        example: 3
+      changeReason?:
+        type: string
+        description: Reason for the last change
+        maxLength: 500
+        example: "Status updated after payment authorization"
+
+  ErrorResponse:
+    type: object
+    description: Standardized error response format for all APIs in the platform
+    properties:
+      errorCode:
+        type: string
+        description: Machine-readable error code following the format DOMAIN-NNNNN
+        example: "ORD-40001"
+      message:
+        type: string
+        description: Human-readable error description
+        maxLength: 500
+        example: "Order validation failed: one or more required fields are missing"
+      details?:
+        type: ErrorDetail[]
+        description: Detailed list of specific errors (e.g., field-level validation failures)
+      correlationId:
+        type: string
+        description: Unique correlation ID for tracing the request across systems
+        example: "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      timestamp:
+        type: datetime
+        description: Timestamp when the error occurred
+        example: "2024-01-15T14:30:00.000Z"
+      path:
+        type: string
+        description: API path that generated the error
+        example: "/api/v1/orders"
+      httpStatus:
+        type: integer
+        description: HTTP status code
+        minimum: 400
+        maximum: 599
+        example: 400
+      retryable:
+        type: boolean
+        description: Whether the client should retry this request
+        default: false
+        example: false
+      retryAfterSeconds?:
+        type: integer
+        description: Suggested wait time in seconds before retrying (if retryable)
+        minimum: 1
+        example: 30
+      documentationUrl?:
+        type: string
+        description: URL to documentation about this error
+        example: "https://developer.enterprise.com/errors/ORD-40001"
+
+  ErrorDetail:
+    type: object
+    description: Individual error detail within an error response
+    properties:
+      field?:
+        type: string
+        description: Field that caused the error (dot notation for nested fields)
+        example: "orderItems[0].quantity"
+      code:
+        type: string
+        description: Specific error code for this detail
+        example: "INVALID_VALUE"
+      message:
+        type: string
+        description: Human-readable description of this specific error
+        example: "Quantity must be a positive integer"
+      rejectedValue?:
+        type: string
+        description: The value that was rejected
+        example: "-1"
+
+  PaginatedResponse:
+    type: object
+    description: Wrapper for paginated collection responses
+    properties:
+      data:
+        type: any[]
+        description: Array of result items for the current page
+      pagination:
+        type: PaginationInfo
+        description: Pagination metadata
+
+  PaginationInfo:
+    type: object
+    description: Pagination metadata for collection endpoints
+    properties:
+      currentPage:
+        type: integer
+        description: Current page number (1-based)
+        minimum: 1
+        example: 1
+      pageSize:
+        type: integer
+        description: Number of items per page
+        minimum: 1
+        maximum: 100
+        example: 20
+      totalPages:
+        type: integer
+        description: Total number of pages
+        minimum: 0
+        example: 15
+      totalItems:
+        type: integer
+        description: Total number of items across all pages
+        minimum: 0
+        example: 293
+      hasNextPage:
+        type: boolean
+        description: Whether there is a subsequent page
+        example: true
+      hasPreviousPage:
+        type: boolean
+        description: Whether there is a preceding page
+        example: false
+      links:
+        type: PaginationLinks
+        description: HATEOAS links for navigation
+
+  PaginationLinks:
+    type: object
+    description: Navigation links for paginated responses
+    properties:
+      self:
+        type: string
+        description: Link to the current page
+        example: "/api/v1/orders?page=1&size=20"
+      first:
+        type: string
+        description: Link to the first page
+        example: "/api/v1/orders?page=1&size=20"
+      last:
+        type: string
+        description: Link to the last page
+        example: "/api/v1/orders?page=15&size=20"
+      next?:
+        type: string
+        description: Link to the next page (absent on last page)
+        example: "/api/v1/orders?page=2&size=20"
+      previous?:
+        type: string
+        description: Link to the previous page (absent on first page)
+
+  HealthCheckResponse:
+    type: object
+    description: API health check response
+    properties:
+      status:
+        type: string
+        enum: [UP, DOWN, DEGRADED]
+        example: "UP"
+      serviceName:
+        type: string
+        example: "order-experience-api"
+      version:
+        type: string
+        example: "1.0.0"
+      timestamp:
+        type: datetime
+        example: "2024-01-15T14:30:00.000Z"
+      dependencies?:
+        type: DependencyHealth[]
+
+  DependencyHealth:
+    type: object
+    description: Health status of a downstream dependency
+    properties:
+      name:
+        type: string
+        example: "order-orchestration-papi"
+      status:
+        type: string
+        enum: [UP, DOWN, DEGRADED, UNKNOWN]
+        example: "UP"
+      responseTimeMs?:
+        type: integer
+        minimum: 0
+        example: 45

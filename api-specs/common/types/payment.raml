@@ -1,0 +1,248 @@
+#%RAML 1.0 Library
+
+usage: Payment-related data types for the enterprise integration platform
+
+types:
+  PaymentStatus:
+    type: string
+    description: Current status of a payment transaction
+    enum:
+      - PENDING
+      - AUTHORIZED
+      - CAPTURED
+      - SETTLED
+      - PARTIALLY_REFUNDED
+      - REFUNDED
+      - VOIDED
+      - DECLINED
+      - FAILED
+      - EXPIRED
+      - CHARGEBACK
+
+  PaymentMethod:
+    type: object
+    description: Payment method details used for a transaction
+    properties:
+      methodType:
+        type: string
+        description: Type of payment method
+        enum: [CREDIT_CARD, DEBIT_CARD, ACH, WIRE_TRANSFER, PAYPAL, APPLE_PAY, GOOGLE_PAY, PURCHASE_ORDER, NET_TERMS, CRYPTOCURRENCY]
+        example: "CREDIT_CARD"
+      cardBrand?:
+        type: string
+        description: Card network brand (for card payments)
+        enum: [VISA, MASTERCARD, AMEX, DISCOVER, DINERS, JCB, UNIONPAY]
+        example: "VISA"
+      cardLastFour?:
+        type: string
+        description: Last four digits of the card number
+        pattern: "^[0-9]{4}$"
+        example: "4242"
+      cardExpiryMonth?:
+        type: integer
+        description: Card expiration month
+        minimum: 1
+        maximum: 12
+        example: 12
+      cardExpiryYear?:
+        type: integer
+        description: Card expiration year
+        minimum: 2024
+        example: 2026
+      cardHolderName?:
+        type: string
+        description: Name on the card
+        maxLength: 200
+        example: "Jane A. Doe"
+      bankName?:
+        type: string
+        description: Bank name (for ACH/wire transfers)
+        example: "Chase Bank"
+      bankAccountLastFour?:
+        type: string
+        description: Last four digits of the bank account
+        pattern: "^[0-9]{4}$"
+        example: "7890"
+      purchaseOrderNumber?:
+        type: string
+        description: Purchase order number (for PO payments)
+        example: "PO-2024-00456"
+      tokenizedId?:
+        type: string
+        description: Tokenized payment method reference for PCI compliance
+        example: "tok_1Mq8E0G3vFZzVOyP"
+      isDefault:
+        type: boolean
+        description: Whether this is the customer's default payment method
+        default: false
+        example: true
+
+  Payment:
+    type: object
+    description: Complete payment transaction record
+    properties:
+      paymentId:
+        type: string
+        description: Globally unique payment transaction identifier
+        example: "PAY-TXN-88123"
+      orderId:
+        type: string
+        description: Reference to the associated order
+        example: "ORD-2024-0115-78432"
+      customerId:
+        type: string
+        description: Reference to the customer
+        example: "CUST-00045821"
+      transactionType:
+        type: string
+        description: Type of payment transaction
+        enum: [AUTHORIZATION, CAPTURE, CHARGE, REFUND, VOID, CHARGEBACK_REVERSAL]
+        example: "CHARGE"
+      status:
+        type: PaymentStatus
+        description: Current status of this payment
+        example: "CAPTURED"
+      amount:
+        type: number
+        format: double
+        description: Transaction amount
+        minimum: 0
+        example: 1486.60
+      currency:
+        type: string
+        description: ISO 4217 currency code
+        pattern: "^[A-Z]{3}$"
+        default: "USD"
+        example: "USD"
+      paymentMethod:
+        type: PaymentMethod
+      authorizationCode?:
+        type: string
+        description: Authorization code from the payment processor
+        example: "AUTH-7829341"
+      gatewayTransactionId?:
+        type: string
+        description: Transaction ID from the payment gateway
+        example: "ch_3OZQjL2eZvKYlo2C0"
+      gatewayName:
+        type: string
+        description: Name of the payment gateway used
+        enum: [STRIPE, ADYEN, BRAINTREE, SQUARE, CYBERSOURCE, AUTHORIZE_NET, WORLDPAY]
+        example: "STRIPE"
+      gatewayResponseCode?:
+        type: string
+        description: Response code from the gateway
+        example: "approved"
+      gatewayResponseMessage?:
+        type: string
+        description: Response message from the gateway
+        example: "Transaction approved"
+      avsResult?:
+        type: string
+        description: Address Verification System result code
+        example: "Y"
+      cvvResult?:
+        type: string
+        description: CVV verification result code
+        example: "M"
+      riskScore?:
+        type: number
+        format: double
+        description: Fraud risk score from risk assessment
+        minimum: 0
+        maximum: 100
+        example: 12.5
+      riskDecision?:
+        type: string
+        description: Fraud risk decision
+        enum: [ACCEPT, REVIEW, DECLINE]
+        example: "ACCEPT"
+      threeDSecureResult?:
+        type: string
+        description: 3D Secure authentication result
+        enum: [AUTHENTICATED, ATTEMPTED, NOT_ENROLLED, FAILED, UNAVAILABLE]
+        example: "AUTHENTICATED"
+      refundedAmount?:
+        type: number
+        format: double
+        description: Total amount refunded for this payment
+        minimum: 0
+        default: 0
+        example: 0
+      metadata?:
+        type: object
+        description: Additional metadata for the transaction
+      ipAddress?:
+        type: string
+        description: IP address of the payer
+        example: "203.0.113.42"
+      billingDescriptor?:
+        type: string
+        description: Text that appears on the customer's bank statement
+        maxLength: 22
+        example: "ACME*ORDER-78432"
+      settlementDate?:
+        type: date-only
+        description: Date when funds were settled
+        example: "2024-01-17"
+      createdAt:
+        type: datetime
+        description: Transaction creation timestamp
+        example: "2024-01-15T14:32:00.000Z"
+      updatedAt:
+        type: datetime
+        description: Transaction last update timestamp
+        example: "2024-01-15T14:32:05.000Z"
+
+  RefundRequest:
+    type: object
+    description: Request to refund a previously captured payment
+    properties:
+      paymentId:
+        type: string
+        description: ID of the original payment to refund
+        example: "PAY-TXN-88123"
+      orderId:
+        type: string
+        description: Associated order ID
+        example: "ORD-2024-0115-78432"
+      refundAmount:
+        type: number
+        format: double
+        description: Amount to refund (must be <= original captured amount minus previous refunds)
+        minimum: 0.01
+        example: 149.99
+      currency:
+        type: string
+        description: ISO 4217 currency code
+        pattern: "^[A-Z]{3}$"
+        default: "USD"
+        example: "USD"
+      reason:
+        type: string
+        description: Reason for the refund
+        enum: [CUSTOMER_REQUEST, DEFECTIVE_PRODUCT, WRONG_ITEM, DUPLICATE_CHARGE, ORDER_CANCELLED, PRICE_ADJUSTMENT, OTHER]
+        example: "CUSTOMER_REQUEST"
+      reasonDetails?:
+        type: string
+        description: Additional details about the refund reason
+        maxLength: 1000
+        example: "Customer received incorrect size and requested a full refund for the item"
+      refundType:
+        type: string
+        description: Whether this is a full or partial refund
+        enum: [FULL, PARTIAL]
+        example: "PARTIAL"
+      lineItemIds?:
+        type: string[]
+        description: Specific line items being refunded (for partial refunds)
+        example: ["LI-20240115-002"]
+      notifyCustomer:
+        type: boolean
+        description: Whether to send a refund notification to the customer
+        default: true
+        example: true
+      initiatedBy:
+        type: string
+        description: User or system initiating the refund
+        example: "cs-agent-jdoe"

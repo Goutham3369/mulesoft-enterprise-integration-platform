@@ -1,0 +1,72 @@
+#%RAML 1.0 SecurityScheme
+
+description: |
+  OAuth 2.0 security scheme using the Authorization Code grant flow with PKCE.
+  Tokens are issued by the Anypoint Platform authorization server and provide
+  fine-grained access control through scopes.
+
+type: OAuth 2.0
+describedBy:
+  headers:
+    Authorization:
+      type: string
+      description: OAuth 2.0 Bearer token
+      example: "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwiY2xpZW50X2lkIjoiY2xpZW50LW9yZGVyLXBvcnRhbC1wcm9kIiwic2NvcGUiOiJyZWFkOm9yZGVycyB3cml0ZTpvcmRlcnMiLCJleHAiOjE3MDUzMjk2MDB9"
+  queryParameters:
+    access_token:
+      type: string
+      description: OAuth 2.0 access token passed as a query parameter (not recommended for production)
+      required: false
+  responses:
+    401:
+      description: |
+        Authentication failed. Possible causes:
+        - Missing Authorization header
+        - Invalid or expired access token
+        - Token signature verification failed
+      body:
+        application/json:
+          example: |
+            {
+              "errorCode": "AUTH-40100",
+              "message": "Authentication failed: access token is invalid or has expired",
+              "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+              "timestamp": "2024-01-15T14:30:00.000Z",
+              "path": "/api/v1/orders",
+              "httpStatus": 401,
+              "retryable": false,
+              "documentationUrl": "https://developer.enterprise.com/auth/oauth2"
+            }
+    403:
+      description: |
+        Authorization failed. The authenticated client does not have the required scope
+        or permissions to access this resource.
+      body:
+        application/json:
+          example: |
+            {
+              "errorCode": "AUTH-40300",
+              "message": "Insufficient permissions: required scope 'write:orders' is not granted",
+              "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+              "timestamp": "2024-01-15T14:30:00.000Z",
+              "path": "/api/v1/orders",
+              "httpStatus": 403,
+              "retryable": false,
+              "documentationUrl": "https://developer.enterprise.com/auth/scopes"
+            }
+settings:
+  authorizationUri: https://anypoint.mulesoft.com/accounts/api/v2/oauth2/authorize
+  accessTokenUri: https://anypoint.mulesoft.com/accounts/api/v2/oauth2/token
+  authorizationGrants: [authorization_code, client_credentials]
+  scopes:
+    - "read:orders"
+    - "write:orders"
+    - "read:customers"
+    - "write:customers"
+    - "read:products"
+    - "write:products"
+    - "read:payments"
+    - "write:payments"
+    - "read:inventory"
+    - "write:inventory"
+    - "admin"

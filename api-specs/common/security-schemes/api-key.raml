@@ -1,0 +1,90 @@
+#%RAML 1.0 SecurityScheme
+
+description: |
+  API Key security scheme for server-to-server and machine-to-machine communication.
+  API keys are provisioned through the Anypoint Platform API Manager and are
+  validated at the API gateway layer. Each key is associated with a specific
+  client application and its approved SLA tier.
+
+type: x-api-key
+describedBy:
+  headers:
+    X-API-Key:
+      type: string
+      description: |
+        API key assigned to the client application. Keys are provisioned through
+        the Anypoint Platform and are associated with SLA tiers that determine
+        rate limits and throughput quotas.
+      required: true
+      example: "ak_live_7f3a8b2c4d5e6f1a2b3c4d5e6f7a8b9c"
+    X-Client-Id:
+      type: string
+      description: Client application identifier for tracking and analytics
+      required: true
+      example: "client-order-portal-prod"
+  responses:
+    401:
+      description: |
+        Authentication failed. The API key is missing, invalid, revoked, or expired.
+      body:
+        application/json:
+          example: |
+            {
+              "errorCode": "AUTH-40101",
+              "message": "Authentication failed: API key is invalid or has been revoked",
+              "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+              "timestamp": "2024-01-15T14:30:00.000Z",
+              "path": "/api/v1/sap/orders",
+              "httpStatus": 401,
+              "retryable": false,
+              "documentationUrl": "https://developer.enterprise.com/auth/api-keys"
+            }
+    403:
+      description: |
+        Authorization failed. The API key does not have permission to access
+        this resource, or the SLA tier does not include this operation.
+      body:
+        application/json:
+          example: |
+            {
+              "errorCode": "AUTH-40301",
+              "message": "API key does not have permission to access this resource",
+              "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+              "timestamp": "2024-01-15T14:30:00.000Z",
+              "path": "/api/v1/sap/orders",
+              "httpStatus": 403,
+              "retryable": false
+            }
+    429:
+      description: |
+        Rate limit exceeded for this API key based on the associated SLA tier.
+      headers:
+        Retry-After:
+          type: integer
+          description: Seconds to wait before retrying
+          example: 60
+        X-RateLimit-Limit:
+          type: integer
+          description: Maximum requests per rate limit window
+          example: 1000
+        X-RateLimit-Remaining:
+          type: integer
+          description: Remaining requests in current window
+          example: 0
+        X-RateLimit-Reset:
+          type: integer
+          description: Unix timestamp when the window resets
+          example: 1705329600
+      body:
+        application/json:
+          example: |
+            {
+              "errorCode": "SYS-42900",
+              "message": "Rate limit exceeded for SLA tier 'Standard'. Upgrade to 'Premium' for higher throughput.",
+              "correlationId": "corr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+              "timestamp": "2024-01-15T14:30:00.000Z",
+              "path": "/api/v1/sap/orders",
+              "httpStatus": 429,
+              "retryable": true,
+              "retryAfterSeconds": 60
+            }

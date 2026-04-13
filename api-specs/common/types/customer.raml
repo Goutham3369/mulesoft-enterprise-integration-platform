@@ -1,0 +1,261 @@
+#%RAML 1.0 Library
+
+usage: Customer-related data types for the enterprise integration platform
+
+types:
+  CustomerSegment:
+    type: string
+    description: Classification of customer based on business value and engagement
+    enum:
+      - ENTERPRISE
+      - MID_MARKET
+      - SMB
+      - RETAIL
+      - WHOLESALE
+      - PARTNER
+      - VIP
+      - GOVERNMENT
+
+  ContactInfo:
+    type: object
+    description: Contact information for a customer
+    properties:
+      primaryEmail:
+        type: string
+        description: Primary email address
+        pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+        example: "john.smith@acmecorp.com"
+      secondaryEmail?:
+        type: string
+        description: Secondary or alternate email address
+        pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+        example: "j.smith@personal.com"
+      primaryPhone:
+        type: string
+        description: Primary contact phone number
+        maxLength: 20
+        example: "+1-212-555-0147"
+      mobilePhone?:
+        type: string
+        description: Mobile phone number
+        maxLength: 20
+        example: "+1-917-555-0198"
+      workPhone?:
+        type: string
+        description: Work phone number
+        maxLength: 20
+        example: "+1-212-555-0300"
+      faxNumber?:
+        type: string
+        description: Fax number
+        maxLength: 20
+        example: "+1-212-555-0301"
+      preferredContactMethod:
+        type: string
+        description: Customer's preferred method of communication
+        enum: [EMAIL, PHONE, SMS, MAIL]
+        default: "EMAIL"
+        example: "EMAIL"
+      timezone?:
+        type: string
+        description: Customer's timezone (IANA format)
+        example: "America/New_York"
+      languagePreference?:
+        type: string
+        description: Preferred language (ISO 639-1)
+        pattern: "^[a-z]{2}$"
+        default: "en"
+        example: "en"
+
+  CustomerAddress:
+    type: object
+    description: Customer address record with type classification
+    properties:
+      addressId:
+        type: string
+        description: Unique identifier for this address record
+        example: "ADDR-00098231"
+      addressType:
+        type: string
+        description: Type of address
+        enum: [BILLING, SHIPPING, HEADQUARTERS, BRANCH, WAREHOUSE]
+        example: "HEADQUARTERS"
+      addressLine1:
+        type: string
+        maxLength: 255
+        example: "100 Enterprise Blvd"
+      addressLine2?:
+        type: string
+        maxLength: 255
+        example: "Building C, Floor 5"
+      city:
+        type: string
+        maxLength: 100
+        example: "Austin"
+      stateProvince:
+        type: string
+        maxLength: 50
+        example: "TX"
+      postalCode:
+        type: string
+        pattern: "^[A-Za-z0-9\\- ]{3,10}$"
+        example: "78701"
+      countryCode:
+        type: string
+        pattern: "^[A-Z]{2}$"
+        example: "US"
+      isPrimary:
+        type: boolean
+        description: Whether this is the primary address for its type
+        default: false
+        example: true
+      isValidated:
+        type: boolean
+        description: Whether this address has been validated by address verification service
+        default: false
+        example: true
+      validatedAt?:
+        type: datetime
+        description: Timestamp when address was last validated
+        example: "2024-01-10T09:00:00.000Z"
+
+  Customer:
+    type: object
+    description: Complete customer record representing an individual or organization
+    properties:
+      customerId:
+        type: string
+        description: Globally unique customer identifier
+        example: "CUST-00045821"
+      externalId?:
+        type: string
+        description: Customer ID from originating external system
+        example: "SF-0018000001AbCdE"
+      customerType:
+        type: string
+        description: Whether the customer is an individual or an organization
+        enum: [INDIVIDUAL, ORGANIZATION]
+        example: "ORGANIZATION"
+      firstName?:
+        type: string
+        description: First name (for individuals)
+        maxLength: 100
+        example: "John"
+      lastName?:
+        type: string
+        description: Last name (for individuals)
+        maxLength: 100
+        example: "Smith"
+      companyName?:
+        type: string
+        description: Company name (for organizations)
+        maxLength: 300
+        example: "Acme Corporation"
+      displayName:
+        type: string
+        description: Display name used throughout the platform
+        maxLength: 300
+        example: "Acme Corporation"
+      segment:
+        type: CustomerSegment
+        description: Business segment classification
+        example: "ENTERPRISE"
+      status:
+        type: string
+        description: Current customer account status
+        enum: [ACTIVE, INACTIVE, SUSPENDED, PENDING_APPROVAL, CLOSED]
+        example: "ACTIVE"
+      contactInfo:
+        type: ContactInfo
+      addresses:
+        type: CustomerAddress[]
+        description: Collection of customer addresses
+        minItems: 1
+      taxExempt:
+        type: boolean
+        description: Whether the customer is tax-exempt
+        default: false
+        example: false
+      taxExemptionId?:
+        type: string
+        description: Tax exemption certificate number
+        example: "TEX-2024-001234"
+      creditLimit?:
+        type: number
+        format: double
+        description: Credit limit for the customer account
+        minimum: 0
+        example: 500000.00
+      paymentTerms:
+        type: string
+        description: Default payment terms
+        enum: [NET_15, NET_30, NET_45, NET_60, NET_90, COD, PREPAID, ON_RECEIPT]
+        default: "NET_30"
+        example: "NET_30"
+      currency:
+        type: string
+        description: Default currency for this customer
+        pattern: "^[A-Z]{3}$"
+        default: "USD"
+        example: "USD"
+      salesRepId?:
+        type: string
+        description: Assigned sales representative ID
+        example: "REP-00234"
+      accountManagerId?:
+        type: string
+        description: Assigned account manager ID
+        example: "MGR-00056"
+      industry?:
+        type: string
+        description: Customer's industry classification
+        example: "Technology"
+      annualRevenue?:
+        type: number
+        format: double
+        description: Customer's annual revenue
+        minimum: 0
+        example: 25000000.00
+      numberOfEmployees?:
+        type: integer
+        description: Number of employees at the customer organization
+        minimum: 1
+        example: 500
+      website?:
+        type: string
+        description: Customer's website URL
+        example: "https://www.acmecorp.com"
+      sfdcAccountId?:
+        type: string
+        description: Salesforce Account ID
+        example: "0018000001AbCdEFGH"
+      sapCustomerNumber?:
+        type: string
+        description: SAP Customer Number
+        example: "0000100234"
+      loyaltyTier?:
+        type: string
+        description: Customer loyalty program tier
+        enum: [BRONZE, SILVER, GOLD, PLATINUM, DIAMOND]
+        example: "GOLD"
+      loyaltyPoints?:
+        type: integer
+        description: Current loyalty points balance
+        minimum: 0
+        example: 15430
+      tags?:
+        type: string[]
+        description: Custom tags for segmentation
+        example: ["early-adopter", "beta-tester", "key-account"]
+      createdAt:
+        type: datetime
+        description: Record creation timestamp
+        example: "2023-06-15T10:00:00.000Z"
+      updatedAt:
+        type: datetime
+        description: Record last update timestamp
+        example: "2024-01-15T14:30:00.000Z"
+      createdBy?:
+        type: string
+        description: User or system that created the record
+        example: "sfdc-sync-service"

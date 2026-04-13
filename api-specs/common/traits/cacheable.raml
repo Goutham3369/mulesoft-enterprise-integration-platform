@@ -1,0 +1,52 @@
+#%RAML 1.0 Trait
+
+usage: Apply to GET endpoints that support HTTP caching with ETags and conditional requests
+
+headers:
+  If-None-Match:
+    type: string
+    description: ETag value from a previous response for conditional GET requests
+    required: false
+    example: '"v3-a1b2c3d4e5f6"'
+  If-Modified-Since:
+    type: string
+    description: Timestamp from a previous response for time-based conditional requests (RFC 7232)
+    required: false
+    example: "Wed, 15 Jan 2024 14:30:00 GMT"
+
+responses:
+  200:
+    headers:
+      ETag:
+        type: string
+        description: Entity tag for cache validation
+        example: '"v3-a1b2c3d4e5f6"'
+      Cache-Control:
+        type: string
+        description: Cache directives for the response
+        example: "private, max-age=300, must-revalidate"
+      Last-Modified:
+        type: string
+        description: Timestamp of the last modification (RFC 7232)
+        example: "Wed, 15 Jan 2024 14:30:00 GMT"
+      Vary:
+        type: string
+        description: Headers that affect cache key
+        example: "Accept, Authorization"
+      X-Cache-Status:
+        type: string
+        description: Whether the response was served from cache
+        enum: [HIT, MISS, BYPASS, STALE]
+        required: false
+        example: "MISS"
+  304:
+    description: Not Modified - the resource has not changed since the conditional request
+    headers:
+      ETag:
+        type: string
+        description: Current entity tag (unchanged)
+        example: '"v3-a1b2c3d4e5f6"'
+      Cache-Control:
+        type: string
+        description: Cache directives
+        example: "private, max-age=300, must-revalidate"
