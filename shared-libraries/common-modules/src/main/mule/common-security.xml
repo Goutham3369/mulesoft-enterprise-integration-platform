@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:validation="http://www.mulesoft.org/schema/mule/validation"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mule/validation/current/mule-validation.xsd">
+
+    <!-- ObjectStore for API key storage -->
+    <os:object-store name="api-key-store"
+                     persistent="true"
+                     entryTtl="86400"
+                     entryTtlUnit="SECONDS"
+                     maxEntries="10000"
+                     expirationInterval="3600"
+                     expirationIntervalUnit="SECONDS" />
+
+    <!-- ============================================================
+         Sub-flow: validate-jwt
+         Validates a JWT Bearer token and extracts claims.
+         Sets variables: jwtClaims, jwtSubject, jwtIssuer, jwtScopes
+         ============================================================ -->
+    <sub-flow name="validate-jwt">
+        <!-- Extract the Authorization header -->
+        <set-variable variableName="authHeader"
+                      value="#[attributes.headers.'authorization' default '']" />
+
+        <!-- Verify Bearer prefix exists -->
+        <choice>
+            <when expression="#[isEmpty(vars.authHeader) or !(vars.authHeader startsWith 'Bearer ')]">
+                <raise-error type="HTTP:UNAUTHORIZED"
+                             description="Missing or malformed Authorization header. Expected format: Bearer &lt;token&gt;" />
+            </when>
+            <otherwise>
+                <!-- Extract the raw JWT token -->
+                <set-variable variableName="jwtToken"
+                              value="#[vars.authHeader[7 to -1]]" />
+
+                <!-- Decode and validate JWT structure (header.payload.signature) -->
+                <ee:transform>
+                    <ee:variables>
+                        <ee:set-variable variableName="jwtParts"><![CDATA[%dw 2.0
+output application/java
+var parts = vars.jwtToken splitBy "."
+---
+if (sizeOf(parts) != 3)
+    { valid: false, error: "Invalid JWT structure: expected 3 parts separated by dots" }
+else do {
+    var headerJson = read(fromBase64((parts[0] replace "-" with "+" replace "_" with "/") ++ 
+        ("=" * (4 - mod(sizeOf(parts[0]), 4)) default "")), "application/json") default null
+    var payloadJson = read(fromBase64((parts[1] replace "-" with "+" replace "_" with "/") ++ 
+        ("=" * (4 - mod(sizeOf(parts[1]), 4)) default "")), "application/json") default null
+    ---
+    if (headerJson == null or payloadJson == null)
+        { valid: false, error: "Failed to decode JWT header or payload" }
+    else {
+        valid: true,
+        header: headerJson,
+        payload: payloadJson
+    }
+}]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+
+                <choice>
+                    <when expression="#[vars.jwtParts.valid != true]">
+                        <raise-error type="HTTP:UNAUTHORIZED"
+                                     description="#[vars.jwtParts.error default 'Invalid JWT token']" />
+                    </when>
+                    <otherwise>
+                        <!-- Validate token expiry -->
+                        <choice>
+                            <when expression="#[vars.jwtParts.payload.exp != null and (vars.jwtParts.payload.exp * 1000) &lt; now() as Number {unit: 'milliseconds'}]">
+                                <raise-error type="HTTP:UNAUTHORIZED"
+                                             description="JWT token has expired" />
+                            </when>
+                            <otherwise>
+                                <!-- Extract claims into flow variables -->
+                                <set-variable variableName="jwtClaims" value="#[vars.jwtParts.payload]" />
+                                <set-variable variableName="jwtSubject" value="#[vars.jwtParts.payload.sub default 'unknown']" />
+                                <set-variable variableName="jwtIssuer" value="#[vars.jwtParts.payload.iss default 'unknown']" />
+                                <set-variable variableName="jwtScopes" value="#[vars.jwtParts.payload.scope default vars.jwtParts.payload.scopes default []]" />
+                                <set-variable variableName="userId" value="#[vars.jwtParts.payload.sub default 'unknown']" />
+                                <logger level="DEBUG"
+                                        message="#['[CORRELATION:' ++ correlationId ++ '] JWT validated for subject: ' ++ (vars.jwtSubject default 'unknown')]" />
+                            </otherwise>
+                        </choice>
+                    </otherwise>
+                </choice>
+            </otherwise>
+        </choice>
+    </sub-flow>
+
+    <!-- ============================================================
+         Sub-flow: validate-api-key
+         Validates the X-API-Key header against the ObjectStore.
+         Sets variables: apiKeyClientId, apiKeyScopes
+         ============================================================ -->
+    <sub-flow name="validate-api-key">
+        <!-- Extract the API key header -->
+        <set-variable variableName="apiKey"
+                      value="#[attributes.headers.'x-api-key' default '']" />
+
+        <choice>
+            <when expression="#[isEmpty(vars.apiKey)]">
+                <raise-error type="HTTP:UNAUTHORIZED"
+                             description="Missing X-API-Key header. An API key is required to access this resource." />
+            </when>
+            <otherwise>
+                <!-- Look up key in ObjectStore -->
+                <try>
+                    <os:retrieve key="#[vars.apiKey]"
+                                 objectStore="api-key-store"
+                                 target="apiKeyEntry" />
+                    <!-- Key found — extract client details -->
+                    <ee:transform>
+                        <ee:variables>
+                            <ee:set-variable variableName="apiKeyClientId"><![CDATA[%dw 2.0
+output application/java
+---
+vars.apiKeyEntry.clientId default "unknown"]]></ee:set-variable>
+                            <ee:set-variable variableName="apiKeyScopes"><![CDATA[%dw 2.0
+output application/java
+---
+vars.apiKeyEntry.scopes default []]]></ee:set-variable>
+                        </ee:variables>
+                    </ee:transform>
+
+                    <!-- Verify the key is not revoked -->
+                    <choice>
+                        <when expression="#[vars.apiKeyEntry.revoked == true]">
+                            <raise-error type="HTTP:FORBIDDEN"
+                                         description="The provided API key has been revoked." />
+                        </when>
+                        <otherwise>
+                            <set-variable variableName="userId" value="#[vars.apiKeyClientId]" />
+                            <logger level="DEBUG"
+                                    message="#['[CORRELATION:' ++ correlationId ++ '] API key validated for client: ' ++ vars.apiKeyClientId]" />
+                        </otherwise>
+                    </choice>
+
+                    <error-handler>
+                        <on-error-propagate type="OS:KEY_NOT_FOUND">
+                            <raise-error type="HTTP:UNAUTHORIZED"
+                                         description="Invalid API key. The provided key is not recognized." />
+                        </on-error-propagate>
+                    </error-handler>
+                </try>
+            </otherwise>
+        </choice>
+    </sub-flow>
+
+    <!-- ============================================================
+         Sub-flow: enforce-cors
+         Sets Cross-Origin Resource Sharing headers on the response.
+         ============================================================ -->
+    <sub-flow name="enforce-cors">
+        <ee:transform>
+            <ee:variables>
+                <ee:set-variable variableName="corsOrigin"><![CDATA[%dw 2.0
+output application/java
+var allowedOrigins = (Mule::p('cors.allowed.origins') default "*") splitBy ","
+var requestOrigin = attributes.headers.'origin' default "*"
+---
+if (allowedOrigins contains "*") "*"
+else if (allowedOrigins contains requestOrigin) requestOrigin
+else ""]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <choice>
+            <when expression="#[!isEmpty(vars.corsOrigin)]">
+                <set-variable variableName="outboundHeaders" value="#[{
+                    'Access-Control-Allow-Origin': vars.corsOrigin,
+                    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key, X-Correlation-ID, Accept',
+                    'Access-Control-Expose-Headers': 'X-Correlation-ID, X-Response-Time, X-RateLimit-Remaining',
+                    'Access-Control-Max-Age': '3600',
+                    'Access-Control-Allow-Credentials': 'true'
+                }]" />
+            </when>
+            <otherwise>
+                <logger level="WARN"
+                        message="#['[CORRELATION:' ++ correlationId ++ '] CORS rejected for origin: ' ++ (attributes.headers.'origin' default 'none')]" />
+                <raise-error type="HTTP:FORBIDDEN"
+                             description="Origin not allowed by CORS policy." />
+            </otherwise>
+        </choice>
+    </sub-flow>
+
+    <!-- ============================================================
+         Sub-flow: mask-pii
+         Masks personally identifiable information in a payload for
+         safe logging. Handles email, phone, SSN, credit card numbers.
+         Input payload as string in vars.piiInput; result in vars.maskedOutput
+         ============================================================ -->
+    <sub-flow name="mask-pii">
+        <ee:transform>
+            <ee:variables>
+                <ee:set-variable variableName="maskedOutput"><![CDATA[%dw 2.0
+output application/java
+
+// Email masking: user@domain.com -> u***@domain.com
+fun maskEmail(text: String): String =
+    text replace /([a-zA-Z0-9._%+\-]){2,}(@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/ with ((match) ->
+        (match[0][0]) ++ "***" ++ match[2]
+    )
+
+// Phone masking: (123) 456-7890 or 123-456-7890 -> ***-***-7890
+fun maskPhone(text: String): String =
+    text replace /(\(?\d{3}\)?[\s\-.]?\d{3}[\s\-.]?)(\d{4})/ with "***-***-$2"
+
+// SSN masking: 123-45-6789 -> ***-**-6789
+fun maskSSN(text: String): String =
+    text replace /\d{3}-\d{2}-(\d{4})/ with "***-**-$1"
+
+// Credit card masking: 1234-5678-9012-3456 -> ****-****-****-3456
+fun maskCreditCard(text: String): String =
+    text replace /\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?(\d{4})/ with "****-****-****-$1"
+
+var input = vars.piiInput default write(payload, "application/json") default ""
+---
+maskCreditCard(maskSSN(maskPhone(maskEmail(input))))]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+    </sub-flow>
+
+</mule>

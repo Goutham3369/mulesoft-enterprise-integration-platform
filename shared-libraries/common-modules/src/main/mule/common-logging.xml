@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- ============================================================
+         Sub-flow: log-request
+         Logs incoming HTTP request details in structured JSON format.
+         ============================================================ -->
+    <sub-flow name="log-request">
+        <ee:transform>
+            <ee:variables>
+                <ee:set-variable variableName="requestLogEntry"><![CDATA[%dw 2.0
+output application/json
+
+var maxBodyLength = 2048
+var rawBody = write(payload, "application/json") default ""
+var truncatedBody = if (sizeOf(rawBody) > maxBodyLength)
+    (rawBody[0 to maxBodyLength - 1]) ++ "...[TRUNCATED]"
+  else rawBody
+
+var safeHeaders = attributes.headers default {} filterObject ((value, key) ->
+    !(lower(key as String) contains "authorization") and
+    !(lower(key as String) contains "x-api-key") and
+    !(lower(key as String) contains "cookie")
+)
+---
+{
+    level: "INFO",
+    logType: "REQUEST",
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    applicationName: app.name,
+    environment: Mule::p('mule.env') default "local",
+    spanId: uuid(),
+    request: {
+        method: attributes.method default "UNKNOWN",
+        path: attributes.requestPath default attributes.requestUri default "unknown",
+        remoteAddress: attributes.remoteAddress default "unknown",
+        headers: safeHeaders,
+        queryParams: attributes.queryParams default {},
+        body: truncatedBody
+    }
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <logger level="INFO" message="#[vars.requestLogEntry]" />
+    </sub-flow>
+
+    <!-- ============================================================
+         Sub-flow: log-response
+         Logs outgoing HTTP response details in structured JSON format.
+         ============================================================ -->
+    <sub-flow name="log-response">
+        <ee:transform>
+            <ee:variables>
+                <ee:set-variable variableName="responseLogEntry"><![CDATA[%dw 2.0
+output application/json
+
+var maxBodyLength = 2048
+var rawBody = write(payload, "application/json") default ""
+var truncatedBody = if (sizeOf(rawBody) > maxBodyLength)
+    (rawBody[0 to maxBodyLength - 1]) ++ "...[TRUNCATED]"
+  else rawBody
+
+var startTime = vars.requestStartTime default now()
+var responseTimeMs = (now() - startTime) as Number {unit: "milliseconds"} default 0
+---
+{
+    level: "INFO",
+    logType: "RESPONSE",
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    applicationName: app.name,
+    environment: Mule::p('mule.env') default "local",
+    spanId: vars.spanId default uuid(),
+    response: {
+        statusCode: vars.httpStatus default 200,
+        responseTimeMs: responseTimeMs,
+        body: truncatedBody
+    }
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <logger level="INFO" message="#[vars.responseLogEntry]" />
+    </sub-flow>
+
+    <!-- ============================================================
+         Sub-flow: log-external-call
+         Logs calls to external/downstream systems.
+         Expects variables: externalSystem, externalOperation,
+                           callStartTime, callStatus
+         ============================================================ -->
+    <sub-flow name="log-external-call">
+        <ee:transform>
+            <ee:variables>
+                <ee:set-variable variableName="externalCallLogEntry"><![CDATA[%dw 2.0
+output application/json
+
+var callStart = vars.callStartTime default now()
+var durationMs = (now() - callStart) as Number {unit: "milliseconds"} default 0
+---
+{
+    level: if (vars.callStatus default "SUCCESS" == "SUCCESS") "INFO" else "ERROR",
+    logType: "EXTERNAL_CALL",
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    applicationName: app.name,
+    environment: Mule::p('mule.env') default "local",
+    spanId: vars.spanId default uuid(),
+    externalCall: {
+        system: vars.externalSystem default "unknown",
+        operation: vars.externalOperation default "unknown",
+        durationMs: durationMs,
+        status: vars.callStatus default "SUCCESS",
+        endpoint: vars.externalEndpoint default "unknown",
+        responseCode: vars.externalResponseCode default null
+    }
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <logger level="#[if (vars.callStatus default 'SUCCESS' == 'SUCCESS') 'INFO' else 'ERROR']"
+                message="#[vars.externalCallLogEntry]" />
+    </sub-flow>
+
+    <!-- ============================================================
+         Sub-flow: log-business-event
+         Logs significant business events for auditing and analytics.
+         Expects variables: eventType, entityType, entityId, eventDetails
+         ============================================================ -->
+    <sub-flow name="log-business-event">
+        <ee:transform>
+            <ee:variables>
+                <ee:set-variable variableName="businessEventLogEntry"><![CDATA[%dw 2.0
+output application/json
+---
+{
+    level: "INFO",
+    logType: "BUSINESS_EVENT",
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    applicationName: app.name,
+    environment: Mule::p('mule.env') default "local",
+    spanId: vars.spanId default uuid(),
+    businessEvent: {
+        eventType: vars.eventType default "UNKNOWN",
+        entityType: vars.entityType default "UNKNOWN",
+        entityId: vars.entityId default "UNKNOWN",
+        details: vars.eventDetails default {},
+        userId: vars.userId default "system",
+        source: vars.eventSource default app.name
+    }
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <logger level="INFO" message="#[vars.businessEventLogEntry]" />
+    </sub-flow>
+
+</mule>

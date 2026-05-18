@@ -1,0 +1,309 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd">
+
+    <error-handler name="global-error-handler">
+
+        <!-- APIKIT:BAD_REQUEST -> 400 -->
+        <on-error-propagate type="APIKIT:BAD_REQUEST" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 400,
+    message: "Bad Request",
+    detail: error.description default "The request was malformed or contains invalid parameters.",
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[400]" />
+            <logger level="WARN" message="#['[CORRELATION:' ++ correlationId ++ '] BAD_REQUEST: ' ++ (error.description default 'No details')]" />
+        </on-error-propagate>
+
+        <!-- APIKIT:NOT_FOUND -> 404 -->
+        <on-error-propagate type="APIKIT:NOT_FOUND" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 404,
+    message: "Not Found",
+    detail: error.description default "The requested resource could not be found.",
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[404]" />
+            <logger level="WARN" message="#['[CORRELATION:' ++ correlationId ++ '] NOT_FOUND: ' ++ (attributes.requestPath default 'unknown')]" />
+        </on-error-propagate>
+
+        <!-- APIKIT:METHOD_NOT_ALLOWED -> 405 -->
+        <on-error-propagate type="APIKIT:METHOD_NOT_ALLOWED" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 405,
+    message: "Method Not Allowed",
+    detail: error.description default "The HTTP method is not allowed for the requested resource.",
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[405]" />
+            <logger level="WARN" message="#['[CORRELATION:' ++ correlationId ++ '] METHOD_NOT_ALLOWED: ' ++ (attributes.method default 'unknown') ++ ' ' ++ (attributes.requestPath default 'unknown')]" />
+        </on-error-propagate>
+
+        <!-- APIKIT:NOT_ACCEPTABLE -> 406 -->
+        <on-error-propagate type="APIKIT:NOT_ACCEPTABLE" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 406,
+    message: "Not Acceptable",
+    detail: error.description default "The server cannot produce a response matching the list of acceptable values.",
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[406]" />
+            <logger level="WARN" message="#['[CORRELATION:' ++ correlationId ++ '] NOT_ACCEPTABLE']" />
+        </on-error-propagate>
+
+        <!-- HTTP:UNAUTHORIZED -> 401 -->
+        <on-error-propagate type="HTTP:UNAUTHORIZED" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 401,
+    message: "Unauthorized",
+    detail: "Authentication is required to access this resource. Provide a valid Bearer token or API key.",
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[401]" />
+            <logger level="WARN" message="#['[CORRELATION:' ++ correlationId ++ '] UNAUTHORIZED access attempt']" />
+        </on-error-propagate>
+
+        <!-- HTTP:FORBIDDEN -> 403 -->
+        <on-error-propagate type="HTTP:FORBIDDEN" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 403,
+    message: "Forbidden",
+    detail: "You do not have sufficient permissions to access this resource.",
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[403]" />
+            <logger level="WARN" message="#['[CORRELATION:' ++ correlationId ++ '] FORBIDDEN access attempt']" />
+        </on-error-propagate>
+
+        <!-- HTTP:CONNECTIVITY -> 503 -->
+        <on-error-propagate type="HTTP:CONNECTIVITY" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 503,
+    message: "Service Unavailable",
+    detail: "A downstream service is currently unavailable. Please retry after a short interval.",
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[503]" />
+            <logger level="ERROR" message="#['[CORRELATION:' ++ correlationId ++ '] CONNECTIVITY failure: ' ++ (error.description default 'Downstream service unreachable')]" />
+        </on-error-propagate>
+
+        <!-- HTTP:TIMEOUT -> 504 -->
+        <on-error-propagate type="HTTP:TIMEOUT" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 504,
+    message: "Gateway Timeout",
+    detail: "A downstream service did not respond within the configured timeout window.",
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[504]" />
+            <logger level="ERROR" message="#['[CORRELATION:' ++ correlationId ++ '] TIMEOUT: ' ++ (error.description default 'Downstream service timeout')]" />
+        </on-error-propagate>
+
+        <!-- HTTP:TOO_MANY_REQUESTS -> 429 -->
+        <on-error-propagate type="HTTP:TOO_MANY_REQUESTS" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 429,
+    message: "Too Many Requests",
+    detail: "Rate limit exceeded. Please wait before making additional requests.",
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[429]" />
+            <logger level="WARN" message="#['[CORRELATION:' ++ correlationId ++ '] RATE_LIMITED: Too many requests']" />
+        </on-error-propagate>
+
+        <!-- VALIDATION:INVALID_BOOLEAN -> 400 -->
+        <on-error-propagate type="VALIDATION:INVALID_BOOLEAN" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 400,
+    message: "Bad Request",
+    detail: "Validation failed: expected a boolean value. " ++ (error.description default ""),
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[400]" />
+            <logger level="WARN" message="#['[CORRELATION:' ++ correlationId ++ '] VALIDATION:INVALID_BOOLEAN: ' ++ (error.description default '')]" />
+        </on-error-propagate>
+
+        <!-- VALIDATION:INVALID_NUMBER -> 400 -->
+        <on-error-propagate type="VALIDATION:INVALID_NUMBER" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 400,
+    message: "Bad Request",
+    detail: "Validation failed: expected a numeric value. " ++ (error.description default ""),
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[400]" />
+            <logger level="WARN" message="#['[CORRELATION:' ++ correlationId ++ '] VALIDATION:INVALID_NUMBER: ' ++ (error.description default '')]" />
+        </on-error-propagate>
+
+        <!-- RETRY_EXHAUSTED -> 503 -->
+        <on-error-propagate type="RETRY_EXHAUSTED" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 503,
+    message: "Service Unavailable",
+    detail: "All retry attempts have been exhausted. The downstream service remains unavailable.",
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[503]" />
+            <logger level="ERROR" message="#['[CORRELATION:' ++ correlationId ++ '] RETRY_EXHAUSTED: All retries failed for downstream call']" />
+        </on-error-propagate>
+
+        <!-- EXPRESSION -> 500 -->
+        <on-error-propagate type="EXPRESSION" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 500,
+    message: "Internal Server Error",
+    detail: "An expression evaluation error occurred while processing the request.",
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[500]" />
+            <logger level="ERROR" message="#['[CORRELATION:' ++ correlationId ++ '] EXPRESSION error: ' ++ (error.description default 'Expression evaluation failed')]" />
+        </on-error-propagate>
+
+        <!-- ANY -> 500 (catch-all) -->
+        <on-error-propagate type="ANY" enableNotifications="true" logException="true">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    errorCode: 500,
+    message: "Internal Server Error",
+    detail: "An unexpected error occurred. Please contact support with the correlationId for further investigation.",
+    path: attributes.requestPath default attributes.requestUri default "unknown"
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="#[500]" />
+            <logger level="ERROR" message="#['[CORRELATION:' ++ correlationId ++ '] UNHANDLED ERROR [' ++ (error.errorType.namespace default 'MULE') ++ ':' ++ (error.errorType.identifier default 'UNKNOWN') ++ ']: ' ++ (error.description default 'No description available')]" />
+        </on-error-propagate>
+
+    </error-handler>
+
+</mule>

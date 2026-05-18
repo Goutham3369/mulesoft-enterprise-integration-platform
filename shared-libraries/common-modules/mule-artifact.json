@@ -1,0 +1,25 @@
+{
+  "name": "common-modules",
+  "minMuleVersion": "4.4.0",
+  "requiredProduct": "MULE_EE",
+  "classLoaderModelLoaderDescriptor": {
+    "id": "mule",
+    "attributes": {
+      "exportedResources": [
+        "dwl/common-transforms.dwl",
+        "dwl/error-response-builder.dwl",
+        "dwl/audit-logger.dwl"
+      ]
+    }
+  },
+  "bundleDescriptorLoader": {
+    "id": "mule",
+    "attributes": {
+      "groupId": "com.enterprise.integration",
+      "artifactId": "common-modules",
+      "version": "1.0.0-SNAPSHOT",
+      "classifier": "mule-domain",
+      "type": "jar"
+    }
+  }
+}

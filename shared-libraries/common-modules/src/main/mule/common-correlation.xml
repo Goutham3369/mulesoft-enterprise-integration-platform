@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- ============================================================
+         Sub-flow: initialize-correlation
+         Extracts the X-Correlation-ID from the inbound request or
+         generates a new UUID if not present. Also captures the
+         request start time for response-time calculations.
+         ============================================================ -->
+    <sub-flow name="initialize-correlation">
+        <!-- Extract or generate the correlation ID -->
+        <set-variable variableName="inboundCorrelationId"
+                      value="#[attributes.headers.'x-correlation-id' default attributes.headers.'x-request-id' default '']" />
+
+        <choice>
+            <when expression="#[!isEmpty(vars.inboundCorrelationId)]">
+                <set-variable variableName="correlationId"
+                              value="#[vars.inboundCorrelationId]" />
+            </when>
+            <otherwise>
+                <set-variable variableName="correlationId"
+                              value="#[correlationId]" />
+            </otherwise>
+        </choice>
+
+        <!-- Generate a unique span ID for distributed tracing -->
+        <set-variable variableName="spanId" value="#[uuid()]" />
+
+        <!-- Capture request start time for response duration calculation -->
+        <set-variable variableName="requestStartTime" value="#[now()]" />
+
+        <logger level="DEBUG"
+                message="#['[CORRELATION:' ++ vars.correlationId ++ '] [SPAN:' ++ vars.spanId ++ '] Correlation initialized']" />
+    </sub-flow>
+
+    <!-- ============================================================
+         Sub-flow: propagate-correlation
+         Adds the correlation ID and span ID to outbound HTTP request
+         headers so downstream services can continue the trace.
+         ============================================================ -->
+    <sub-flow name="propagate-correlation">
+        <ee:transform>
+            <ee:variables>
+                <ee:set-variable variableName="outboundCorrelationHeaders"><![CDATA[%dw 2.0
+output application/java
+---
+{
+    "X-Correlation-ID": vars.correlationId default correlationId,
+    "X-Span-ID": vars.spanId default uuid(),
+    "X-Parent-Span-ID": vars.parentSpanId default vars.spanId default "",
+    "X-Request-Start": vars.requestStartTime as String default now() as String,
+    "X-Source-Application": app.name default "mule-app"
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <!-- Generate a new child span ID for the outbound call -->
+        <set-variable variableName="parentSpanId" value="#[vars.spanId default '']" />
+        <set-variable variableName="spanId" value="#[uuid()]" />
+
+        <logger level="DEBUG"
+                message="#['[CORRELATION:' ++ (vars.correlationId default correlationId) ++ '] Propagating correlation to outbound request']" />
+    </sub-flow>
+
+    <!-- ============================================================
+         Sub-flow: set-response-headers
+         Adds correlation tracking, timing, and cache-control headers
+         to the outgoing HTTP response.
+         ============================================================ -->
+    <sub-flow name="set-response-headers">
+        <ee:transform>
+            <ee:variables>
+                <ee:set-variable variableName="responseHeaders"><![CDATA[%dw 2.0
+output application/java
+
+var startTime = vars.requestStartTime default now()
+var elapsedMs = (now() - startTime) as Number {unit: "milliseconds"} default 0
+---
+{
+    "X-Correlation-ID": vars.correlationId default correlationId,
+    "X-Span-ID": vars.spanId default "",
+    "X-Response-Time": elapsedMs as String ++ "ms",
+    "X-Powered-By": "MuleSoft Enterprise Integration Platform",
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "Pragma": "no-cache",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains"
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <logger level="DEBUG"
+                message="#['[CORRELATION:' ++ (vars.correlationId default correlationId) ++ '] Response headers prepared, elapsed: ' ++ (vars.responseHeaders.'X-Response-Time' default 'unknown')]" />
+    </sub-flow>
+
+</mule>
