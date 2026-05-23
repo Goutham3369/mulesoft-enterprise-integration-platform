@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- Reusable sub-flow for error response construction -->
+    <sub-flow name="sap-build-error-response">
+        <ee:transform doc:name="Build Standard Error Envelope">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    httpStatus: vars.httpStatus default 500,
+    errorCode: vars.errorCode default "INTERNAL_SERVER_ERROR",
+    message: vars.errorMessage default "An unexpected error occurred",
+    detail: error.description default "",
+    correlationId: vars.correlationId default correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    source: "sap-erp-sapi"
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+
+    <!-- Sub-flow: log and structure connectivity errors for SAP -->
+    <sub-flow name="sap-handle-connectivity-error">
+        <logger doc:name="Log SAP Connectivity Error" level="ERROR"
+                message='#["[" ++ (vars.correlationId default "") ++ "] SAP backend connectivity failure: " ++ error.description default ""]'/>
+        <set-variable doc:name="Set HTTP 503" variableName="httpStatus" value="#[503]"/>
+        <set-variable doc:name="Set Error Code" variableName="errorCode" value="SAP_CONNECTIVITY_ERROR"/>
+        <set-variable doc:name="Set Error Message" variableName="errorMessage"
+                       value="Unable to reach SAP ERP backend system. Please retry later."/>
+        <flow-ref doc:name="Build Error Response" name="sap-build-error-response"/>
+    </sub-flow>
+
+    <!-- Sub-flow: log and structure timeout errors for SAP -->
+    <sub-flow name="sap-handle-timeout-error">
+        <logger doc:name="Log SAP Timeout Error" level="ERROR"
+                message='#["[" ++ (vars.correlationId default "") ++ "] SAP backend request timed out: " ++ error.description default ""]'/>
+        <set-variable doc:name="Set HTTP 504" variableName="httpStatus" value="#[504]"/>
+        <set-variable doc:name="Set Error Code" variableName="errorCode" value="SAP_TIMEOUT_ERROR"/>
+        <set-variable doc:name="Set Error Message" variableName="errorMessage"
+                       value="The request to SAP ERP backend timed out. Please retry later."/>
+        <flow-ref doc:name="Build Error Response" name="sap-build-error-response"/>
+    </sub-flow>
+
+    <!-- Sub-flow: handle validation errors -->
+    <sub-flow name="sap-handle-validation-error">
+        <logger doc:name="Log Validation Error" level="WARN"
+                message='#["[" ++ (vars.correlationId default "") ++ "] Request validation failed: " ++ error.description default ""]'/>
+        <set-variable doc:name="Set HTTP 400" variableName="httpStatus" value="#[400]"/>
+        <set-variable doc:name="Set Error Code" variableName="errorCode" value="VALIDATION_ERROR"/>
+        <set-variable doc:name="Set Error Message" variableName="errorMessage"
+                       value="#[error.description default 'Request validation failed']"/>
+        <flow-ref doc:name="Build Error Response" name="sap-build-error-response"/>
+    </sub-flow>
+</mule>

@@ -1,0 +1,588 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:validation="http://www.mulesoft.org/schema/mule/validation"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mule/validation/current/mule-validation.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!-- ============================================================ -->
+    <!-- GET /sap/orders - Query SAP orders with pagination/filtering -->
+    <!-- ============================================================ -->
+    <flow name="get:\sap\orders:sap-erp-api-config">
+        <logger doc:name="Log Get Orders" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] Fetching SAP orders - offset=" ++ (attributes.queryParams.offset default "0") ++ " limit=" ++ (attributes.queryParams.limit default "20")]'/>
+
+        <set-variable doc:name="Set Pagination" variableName="offset"
+                       value="#[attributes.queryParams.offset default '0']"/>
+        <set-variable doc:name="Set Limit" variableName="limit"
+                       value="#[attributes.queryParams.limit default '20']"/>
+        <set-variable doc:name="Set Status Filter" variableName="statusFilter"
+                       value="#[attributes.queryParams.status default '']"/>
+        <set-variable doc:name="Set Customer Filter" variableName="customerFilter"
+                       value="#[attributes.queryParams.customerId default '']"/>
+        <set-variable doc:name="Set Date From" variableName="dateFrom"
+                       value="#[attributes.queryParams.dateFrom default '']"/>
+
+        <http:request doc:name="Request SAP Orders" config-ref="sap-backend-request-config"
+                      method="GET" path="/sap/opu/odata/sap/API_SALES_ORDER_SRV/A_SalesOrder">
+            <http:headers>#[output application/java --- {
+    "X-Correlation-Id": vars.correlationId,
+    "Accept": "application/json",
+    "X-CSRF-Token": "Fetch"
+}]</http:headers>
+            <http:query-params>#[output application/java --- {
+    ("\$skip"): vars.offset,
+    ("\$top"): vars.limit
+} ++ (if (vars.statusFilter != '') {("\$filter"): "OverallSDProcessStatus eq '" ++ vars.statusFilter ++ "'"} else {})]</http:query-params>
+        </http:request>
+
+        <ee:transform doc:name="Transform SAP Orders Response">
+            <ee:message>
+                <ee:set-payload resource="dwl/sap-order-response-transform.dwl"/>
+            </ee:message>
+        </ee:transform>
+
+        <logger doc:name="Log Orders Retrieved" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] Retrieved " ++ sizeOf(payload.orders default []) ++ " SAP orders"]'/>
+
+        <error-handler>
+            <on-error-propagate type="HTTP:CONNECTIVITY, HTTP:TIMEOUT" doc:name="SAP Connection Error">
+                <logger doc:name="Log SAP Error" level="ERROR"
+                        message='#["[" ++ vars.correlationId ++ "] SAP connectivity error fetching orders: " ++ error.description]'/>
+                <set-variable doc:name="Set HTTP Status" variableName="httpStatus" value="#[503]"/>
+                <ee:transform doc:name="Error Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    errorCode: "SAP_CONNECTIVITY_ERROR",
+    message: "Unable to connect to SAP ERP system",
+    correlationId: vars.correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <!-- ============================================================ -->
+    <!-- POST /sap/orders - Create order in SAP                       -->
+    <!-- ============================================================ -->
+    <flow name="post:\sap\orders:application\json:sap-erp-api-config">
+        <logger doc:name="Log Create Order" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] Creating SAP order for customer: " ++ (payload.customerId default "unknown")]'/>
+
+        <set-variable doc:name="Store Original Payload" variableName="originalPayload" value="#[payload]"/>
+
+        <validation:is-not-null doc:name="Validate Customer ID" value="#[payload.customerId]"
+                                 message="Customer ID is required"/>
+        <validation:is-not-null doc:name="Validate Order Items" value="#[payload.items]"
+                                 message="Order items are required"/>
+
+        <ee:transform doc:name="Transform to SAP BAPI Format">
+            <ee:message>
+                <ee:set-payload resource="dwl/sap-order-request-transform.dwl"/>
+            </ee:message>
+        </ee:transform>
+
+        <http:request doc:name="Create SAP Order" config-ref="sap-backend-request-config"
+                      method="POST" path="/sap/opu/odata/sap/API_SALES_ORDER_SRV/A_SalesOrder">
+            <http:headers>#[output application/java --- {
+    "X-Correlation-Id": vars.correlationId,
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "X-CSRF-Token": vars.csrfToken default "fetch"
+}]</http:headers>
+        </http:request>
+
+        <set-variable doc:name="Set SAP Order Number" variableName="sapOrderNumber"
+                       value="#[payload.d.SalesOrder default '']"/>
+
+        <ee:transform doc:name="Transform Create Response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: true,
+    sapOrderNumber: vars.sapOrderNumber,
+    orderId: payload.d.SalesOrder default "",
+    orderType: payload.d.SalesOrderType default "OR",
+    salesOrganization: payload.d.SalesOrganization default "",
+    status: "CREATED",
+    createdAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    correlationId: vars.correlationId,
+    message: "SAP Sales Order created successfully"
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <set-variable doc:name="Set HTTP Status 201" variableName="httpStatus" value="#[201]"/>
+
+        <logger doc:name="Log Order Created" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] SAP Order created: " ++ vars.sapOrderNumber]'/>
+
+        <error-handler>
+            <on-error-propagate type="VALIDATION:INVALID_BOOLEAN, VALIDATION:NULL" doc:name="Validation Error">
+                <logger doc:name="Log Validation Error" level="WARN"
+                        message='#["[" ++ vars.correlationId ++ "] Order validation failed: " ++ error.description]'/>
+                <set-variable doc:name="Set HTTP Status" variableName="httpStatus" value="#[400]"/>
+                <ee:transform doc:name="Validation Error Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    errorCode: "VALIDATION_ERROR",
+    message: error.description,
+    correlationId: vars.correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="HTTP:CONNECTIVITY, HTTP:TIMEOUT" doc:name="SAP Error">
+                <logger doc:name="Log SAP Error" level="ERROR"
+                        message='#["[" ++ vars.correlationId ++ "] SAP error creating order: " ++ error.description]'/>
+                <set-variable doc:name="Set HTTP Status" variableName="httpStatus" value="#[503]"/>
+                <ee:transform doc:name="SAP Error Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    errorCode: "SAP_CREATE_ERROR",
+    message: "Failed to create order in SAP ERP",
+    detail: error.description,
+    correlationId: vars.correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <!-- ============================================================ -->
+    <!-- GET /sap/orders/{orderId} - Get single order with line items -->
+    <!-- ============================================================ -->
+    <flow name="get:\sap\orders\(orderId):sap-erp-api-config">
+        <logger doc:name="Log Get Order By ID" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] Fetching SAP order: " ++ attributes.uriParams.orderId]'/>
+
+        <set-variable doc:name="Set Order ID" variableName="orderId" value="#[attributes.uriParams.orderId]"/>
+
+        <http:request doc:name="Get SAP Order" config-ref="sap-backend-request-config"
+                      method="GET" path="#['/sap/opu/odata/sap/API_SALES_ORDER_SRV/A_SalesOrder(\'' ++ vars.orderId ++ '\')']">
+            <http:headers>#[output application/java --- {
+    "X-Correlation-Id": vars.correlationId,
+    "Accept": "application/json"
+}]</http:headers>
+            <http:query-params>#[output application/java --- {
+    ("\$expand"): "to_Item"
+}]</http:query-params>
+        </http:request>
+
+        <ee:transform doc:name="Transform Order Detail Response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var sapOrder = payload.d
+---
+{
+    orderId: sapOrder.SalesOrder default "",
+    orderType: sapOrder.SalesOrderType default "",
+    salesOrganization: sapOrder.SalesOrganization default "",
+    distributionChannel: sapOrder.DistributionChannel default "",
+    division: sapOrder.OrganizationDivision default "",
+    customer: {
+        id: sapOrder.SoldToParty default "",
+        purchaseOrderNumber: sapOrder.PurchaseOrderByCustomer default ""
+    },
+    pricing: {
+        netAmount: sapOrder.TotalNetAmount as Number default 0,
+        currency: sapOrder.TransactionCurrency default "USD",
+        taxAmount: sapOrder.TaxAmount as Number default 0
+    },
+    status: {
+        overall: sapOrder.OverallSDProcessStatus default "",
+        delivery: sapOrder.OverallDeliveryStatus default "",
+        billing: sapOrder.OverallBillingStatus default ""
+    },
+    dates: {
+        created: sapOrder.CreationDate default "",
+        requested: sapOrder.RequestedDeliveryDate default "",
+        validFrom: sapOrder.SalesOrderDate default ""
+    },
+    lineItems: (sapOrder.to_Item.results default []) map ((item, idx) -> {
+        itemNumber: item.SalesOrderItem default "",
+        materialNumber: item.Material default "",
+        description: item.SalesOrderItemText default "",
+        quantity: item.RequestedQuantity as Number default 0,
+        unit: item.RequestedQuantityUnit default "EA",
+        netAmount: item.NetAmount as Number default 0,
+        plant: item.Plant default "",
+        storageLocation: item.StorageLocation default ""
+    }),
+    metadata: {
+        correlationId: vars.correlationId,
+        retrievedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+        source: "SAP_ERP"
+    }
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <logger doc:name="Log Order Retrieved" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] SAP order " ++ vars.orderId ++ " retrieved with " ++ sizeOf(payload.lineItems default []) ++ " line items"]'/>
+
+        <error-handler>
+            <on-error-propagate type="HTTP:NOT_FOUND" doc:name="Order Not Found">
+                <logger doc:name="Log Not Found" level="WARN"
+                        message='#["[" ++ vars.correlationId ++ "] SAP order not found: " ++ vars.orderId]'/>
+                <set-variable doc:name="Set HTTP Status" variableName="httpStatus" value="#[404]"/>
+                <ee:transform doc:name="Not Found Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    errorCode: "ORDER_NOT_FOUND",
+    message: "SAP order '" ++ vars.orderId ++ "' was not found",
+    correlationId: vars.correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <!-- ============================================================ -->
+    <!-- PUT /sap/orders/{orderId} - Update order status              -->
+    <!-- ============================================================ -->
+    <flow name="put:\sap\orders\(orderId):application\json:sap-erp-api-config">
+        <logger doc:name="Log Update Order" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] Updating SAP order: " ++ attributes.uriParams.orderId]'/>
+
+        <set-variable doc:name="Set Order ID" variableName="orderId" value="#[attributes.uriParams.orderId]"/>
+        <set-variable doc:name="Store Update Payload" variableName="updatePayload" value="#[payload]"/>
+
+        <ee:transform doc:name="Transform Update Payload to SAP Format">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var statusMapping = {
+    "APPROVED": "B",
+    "IN_PROGRESS": "C",
+    "COMPLETED": "D",
+    "CANCELLED": "E",
+    "ON_HOLD": "A"
+}
+---
+{
+    OverallSDProcessStatus: statusMapping[vars.updatePayload.status] default "A",
+    PurchaseOrderByCustomer: vars.updatePayload.purchaseOrderNumber default "",
+    RequestedDeliveryDate: vars.updatePayload.requestedDeliveryDate default ""
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <http:request doc:name="Update SAP Order" config-ref="sap-backend-request-config"
+                      method="PATCH" path="#['/sap/opu/odata/sap/API_SALES_ORDER_SRV/A_SalesOrder(\'' ++ vars.orderId ++ '\')']">
+            <http:headers>#[output application/java --- {
+    "X-Correlation-Id": vars.correlationId,
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "If-Match": "*"
+}]</http:headers>
+        </http:request>
+
+        <ee:transform doc:name="Transform Update Response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: true,
+    orderId: vars.orderId,
+    status: vars.updatePayload.status default "UPDATED",
+    message: "SAP order updated successfully",
+    updatedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    correlationId: vars.correlationId
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <logger doc:name="Log Order Updated" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] SAP order " ++ vars.orderId ++ " updated successfully"]'/>
+    </flow>
+
+    <!-- ============================================================ -->
+    <!-- GET /sap/materials - List materials with search              -->
+    <!-- ============================================================ -->
+    <flow name="get:\sap\materials:sap-erp-api-config">
+        <logger doc:name="Log Get Materials" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] Fetching SAP materials - search=" ++ (attributes.queryParams.search default "")]'/>
+
+        <set-variable doc:name="Set Search Term" variableName="searchTerm"
+                       value="#[attributes.queryParams.search default '']"/>
+        <set-variable doc:name="Set Material Group" variableName="materialGroup"
+                       value="#[attributes.queryParams.materialGroup default '']"/>
+
+        <http:request doc:name="Get SAP Materials" config-ref="sap-backend-request-config"
+                      method="GET" path="/sap/opu/odata/sap/API_PRODUCT_SRV/A_Product">
+            <http:headers>#[output application/java --- {
+    "X-Correlation-Id": vars.correlationId,
+    "Accept": "application/json"
+}]</http:headers>
+            <http:query-params>#[output application/java --- {
+    ("\$top"): attributes.queryParams.limit default "50"
+} ++ (if (vars.searchTerm != '') {("\$filter"): "substringof('" ++ vars.searchTerm ++ "', ProductDescription)"} else {})]</http:query-params>
+        </http:request>
+
+        <ee:transform doc:name="Transform Materials Response">
+            <ee:message>
+                <ee:set-payload resource="dwl/sap-material-transform.dwl"/>
+            </ee:message>
+        </ee:transform>
+
+        <logger doc:name="Log Materials Retrieved" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] Retrieved " ++ sizeOf(payload.materials default []) ++ " materials"]'/>
+    </flow>
+
+    <!-- ============================================================ -->
+    <!-- GET /sap/materials/{materialId}/availability                 -->
+    <!-- ============================================================ -->
+    <flow name="get:\sap\materials\(materialId)\availability:sap-erp-api-config">
+        <logger doc:name="Log Check Availability" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] Checking availability for material: " ++ attributes.uriParams.materialId]'/>
+
+        <set-variable doc:name="Set Material ID" variableName="materialId"
+                       value="#[attributes.uriParams.materialId]"/>
+
+        <http:request doc:name="Get Material Availability" config-ref="sap-backend-request-config"
+                      method="GET" path="#['/sap/opu/odata/sap/API_MATERIAL_STOCK_SRV/A_MatlStkInAcctMod']">
+            <http:headers>#[output application/java --- {
+    "X-Correlation-Id": vars.correlationId,
+    "Accept": "application/json"
+}]</http:headers>
+            <http:query-params>#[output application/java --- {
+    ("\$filter"): "Material eq '" ++ vars.materialId ++ "'"
+}]</http:query-params>
+        </http:request>
+
+        <ee:transform doc:name="Transform Availability Response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var stockData = payload.d.results default []
+---
+{
+    materialId: vars.materialId,
+    totalAvailableStock: sum(stockData map ((item) -> item.MatlWrhsStkQtyInMatlBaseUnit as Number default 0)),
+    unit: (stockData[0].MaterialBaseUnit) default "EA",
+    availabilityByPlant: stockData map ((item) -> {
+        plant: item.Plant default "",
+        storageLocation: item.StorageLocation default "",
+        availableQuantity: item.MatlWrhsStkQtyInMatlBaseUnit as Number default 0,
+        inTransitQuantity: item.MaterialInTransitQuantity as Number default 0,
+        blockedStock: item.BlockedMaterialStock as Number default 0,
+        qualityInspectionStock: item.QualityInspectionStockQuantity as Number default 0
+    }),
+    isAvailable: sum(stockData map ((item) -> item.MatlWrhsStkQtyInMatlBaseUnit as Number default 0)) > 0,
+    lastUpdated: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    correlationId: vars.correlationId
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <logger doc:name="Log Availability Result" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] Material " ++ vars.materialId ++ " availability checked across " ++ sizeOf(payload.availabilityByPlant default []) ++ " plants"]'/>
+    </flow>
+
+    <!-- ============================================================ -->
+    <!-- GET /sap/customers - List SAP customers                     -->
+    <!-- ============================================================ -->
+    <flow name="get:\sap\customers:sap-erp-api-config">
+        <logger doc:name="Log Get Customers" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] Fetching SAP customers"]'/>
+
+        <set-variable doc:name="Set Search" variableName="customerSearch"
+                       value="#[attributes.queryParams.search default '']"/>
+
+        <http:request doc:name="Get SAP Customers" config-ref="sap-backend-request-config"
+                      method="GET" path="/sap/opu/odata/sap/API_BUSINESS_PARTNER/A_BusinessPartner">
+            <http:headers>#[output application/java --- {
+    "X-Correlation-Id": vars.correlationId,
+    "Accept": "application/json"
+}]</http:headers>
+            <http:query-params>#[output application/java --- {
+    ("\$top"): attributes.queryParams.limit default "50",
+    ("\$filter"): "BusinessPartnerCategory eq '1'" ++ (if (vars.customerSearch != '') " and substringof('" ++ vars.customerSearch ++ "', BusinessPartnerFullName)" else "")
+}]</http:query-params>
+        </http:request>
+
+        <ee:transform doc:name="Transform Customers Response">
+            <ee:message>
+                <ee:set-payload resource="dwl/sap-customer-transform.dwl"/>
+            </ee:message>
+        </ee:transform>
+
+        <logger doc:name="Log Customers Retrieved" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] Retrieved " ++ sizeOf(payload.customers default []) ++ " SAP customers"]'/>
+    </flow>
+
+    <!-- ============================================================ -->
+    <!-- POST /sap/customers - Create customer master                -->
+    <!-- ============================================================ -->
+    <flow name="post:\sap\customers:application\json:sap-erp-api-config">
+        <logger doc:name="Log Create Customer" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] Creating SAP customer: " ++ (payload.companyName default "unknown")]'/>
+
+        <set-variable doc:name="Store Original Payload" variableName="customerPayload" value="#[payload]"/>
+
+        <validation:is-not-null doc:name="Validate Company Name" value="#[payload.companyName]"
+                                 message="Company name is required"/>
+
+        <ee:transform doc:name="Transform to SAP Customer Format">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    BusinessPartnerCategory: "1",
+    BusinessPartnerFullName: vars.customerPayload.companyName default "",
+    FirstName: vars.customerPayload.firstName default "",
+    LastName: vars.customerPayload.lastName default "",
+    BusinessPartnerIsBlocked: false,
+    Language: vars.customerPayload.language default "EN",
+    to_BusinessPartnerAddress: [{
+        Country: vars.customerPayload.address.country default "",
+        Region: vars.customerPayload.address.state default "",
+        CityName: vars.customerPayload.address.city default "",
+        PostalCode: vars.customerPayload.address.postalCode default "",
+        StreetName: vars.customerPayload.address.street default "",
+        HouseNumber: vars.customerPayload.address.houseNumber default "",
+        to_EmailAddress: [{
+            EmailAddress: vars.customerPayload.email default ""
+        }],
+        to_PhoneNumber: [{
+            PhoneNumber: vars.customerPayload.phone default ""
+        }]
+    }]
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <http:request doc:name="Create SAP Customer" config-ref="sap-backend-request-config"
+                      method="POST" path="/sap/opu/odata/sap/API_BUSINESS_PARTNER/A_BusinessPartner">
+            <http:headers>#[output application/java --- {
+    "X-Correlation-Id": vars.correlationId,
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+}]</http:headers>
+        </http:request>
+
+        <ee:transform doc:name="Transform Create Customer Response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: true,
+    customerId: payload.d.BusinessPartner default "",
+    customerName: payload.d.BusinessPartnerFullName default "",
+    status: "CREATED",
+    createdAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    correlationId: vars.correlationId,
+    message: "SAP customer master created successfully"
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <set-variable doc:name="Set HTTP Status 201" variableName="httpStatus" value="#[201]"/>
+
+        <logger doc:name="Log Customer Created" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] SAP customer created: " ++ payload.customerId]'/>
+    </flow>
+
+    <!-- ============================================================ -->
+    <!-- POST /sap/invoice - Generate invoice document                -->
+    <!-- ============================================================ -->
+    <flow name="post:\sap\invoice:application\json:sap-erp-api-config">
+        <logger doc:name="Log Create Invoice" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] Generating SAP invoice for order: " ++ (payload.orderId default "unknown")]'/>
+
+        <set-variable doc:name="Store Invoice Payload" variableName="invoicePayload" value="#[payload]"/>
+
+        <validation:is-not-null doc:name="Validate Order ID" value="#[payload.orderId]"
+                                 message="Order ID is required for invoice generation"/>
+
+        <ee:transform doc:name="Transform to SAP Billing Format">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    SalesOrder: vars.invoicePayload.orderId default "",
+    BillingDocumentType: vars.invoicePayload.invoiceType default "F2",
+    BillingDocumentDate: (vars.invoicePayload.invoiceDate default now()) as String {format: "yyyy-MM-dd"},
+    to_Item: (vars.invoicePayload.lineItems default []) map ((item, idx) -> {
+        SalesOrderItem: item.itemNumber default ((idx + 1) * 10 as String),
+        BillingQuantity: item.quantity default 1,
+        BillingQuantityUnit: item.unit default "EA"
+    })
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <http:request doc:name="Create SAP Invoice" config-ref="sap-backend-request-config"
+                      method="POST" path="/sap/opu/odata/sap/API_BILLING_DOCUMENT_SRV/A_BillingDocument">
+            <http:headers>#[output application/java --- {
+    "X-Correlation-Id": vars.correlationId,
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+}]</http:headers>
+        </http:request>
+
+        <ee:transform doc:name="Transform Invoice Response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: true,
+    invoiceNumber: payload.d.BillingDocument default "",
+    orderId: vars.invoicePayload.orderId,
+    invoiceType: payload.d.BillingDocumentType default "F2",
+    totalAmount: payload.d.TotalNetAmount as Number default 0,
+    currency: payload.d.TransactionCurrency default "USD",
+    taxAmount: payload.d.TaxAmount as Number default 0,
+    status: "GENERATED",
+    generatedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    correlationId: vars.correlationId,
+    message: "Invoice document generated successfully"
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <set-variable doc:name="Set HTTP Status 201" variableName="httpStatus" value="#[201]"/>
+
+        <logger doc:name="Log Invoice Generated" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] SAP invoice generated: " ++ payload.invoiceNumber]'/>
+    </flow>
+</mule>

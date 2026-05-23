@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- Global Property Placeholder -->
+    <configuration-properties doc:name="Environment Properties"
+                               file="properties/${mule.env}.yaml"/>
+
+    <!-- HTTP Listener Configuration -->
+    <http:listener-config name="sap-http-listener-config" doc:name="SAP HTTP Listener Config">
+        <http:listener-connection host="0.0.0.0" port="${http.port}"/>
+    </http:listener-config>
+
+    <!-- HTTP Request Configuration for SAP Backend -->
+    <http:request-config name="sap-backend-request-config" doc:name="SAP Backend Request Config">
+        <http:request-connection host="${sap.host}" port="${sap.port}"
+                                  protocol="HTTPS">
+            <http:authentication>
+                <http:basic-authentication username="${sap.username}" password="${sap.password}"/>
+            </http:authentication>
+        </http:request-connection>
+    </http:request-config>
+
+    <!-- APIKit Configuration -->
+    <apikit:config name="sap-erp-api-config" doc:name="SAP ERP API Config"
+                    raml="api/sap-erp-api.raml"
+                    outboundHeadersMapName="outboundHeaders"
+                    httpStatusVarName="httpStatus"/>
+
+    <!-- ObjectStore Configuration -->
+    <os:object-store name="sap-cache-object-store" doc:name="SAP Cache ObjectStore"
+                      persistent="false"
+                      entryTtl="300"
+                      entryTtlUnit="SECONDS"
+                      maxEntries="500"/>
+
+    <!-- Global Error Handler Reference -->
+    <error-handler name="global-error-handler" doc:name="Global Error Handler">
+        <on-error-propagate type="APIKIT:BAD_REQUEST" doc:name="Bad Request 400">
+            <set-variable doc:name="Set HTTP Status" variableName="httpStatus" value="#[400]"/>
+            <set-variable doc:name="Set Headers" variableName="outboundHeaders"
+                           value="#[{'Content-Type': 'application/json'}]"/>
+            <ee:transform doc:name="Bad Request Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    httpStatus: 400,
+    errorCode: "BAD_REQUEST",
+    message: "The request is malformed or contains invalid parameters",
+    detail: error.description default "",
+    correlationId: vars.correlationId default correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="APIKIT:NOT_FOUND" doc:name="Not Found 404">
+            <set-variable doc:name="Set HTTP Status" variableName="httpStatus" value="#[404]"/>
+            <set-variable doc:name="Set Headers" variableName="outboundHeaders"
+                           value="#[{'Content-Type': 'application/json'}]"/>
+            <ee:transform doc:name="Not Found Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    httpStatus: 404,
+    errorCode: "RESOURCE_NOT_FOUND",
+    message: "The requested resource was not found",
+    detail: error.description default "",
+    correlationId: vars.correlationId default correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="APIKIT:METHOD_NOT_ALLOWED" doc:name="Method Not Allowed 405">
+            <set-variable doc:name="Set HTTP Status" variableName="httpStatus" value="#[405]"/>
+            <set-variable doc:name="Set Headers" variableName="outboundHeaders"
+                           value="#[{'Content-Type': 'application/json'}]"/>
+            <ee:transform doc:name="Method Not Allowed Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    httpStatus: 405,
+    errorCode: "METHOD_NOT_ALLOWED",
+    message: "The HTTP method is not allowed for this resource",
+    detail: error.description default "",
+    correlationId: vars.correlationId default correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="HTTP:UNAUTHORIZED" doc:name="Unauthorized 401">
+            <set-variable doc:name="Set HTTP Status" variableName="httpStatus" value="#[401]"/>
+            <set-variable doc:name="Set Headers" variableName="outboundHeaders"
+                           value="#[{'Content-Type': 'application/json'}]"/>
+            <ee:transform doc:name="Unauthorized Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    httpStatus: 401,
+    errorCode: "UNAUTHORIZED",
+    message: "Authentication credentials are missing or invalid",
+    correlationId: vars.correlationId default correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="HTTP:CONNECTIVITY" doc:name="Service Unavailable 503">
+            <set-variable doc:name="Set HTTP Status" variableName="httpStatus" value="#[503]"/>
+            <set-variable doc:name="Set Headers" variableName="outboundHeaders"
+                           value="#[{'Content-Type': 'application/json'}]"/>
+            <ee:transform doc:name="Service Unavailable Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    httpStatus: 503,
+    errorCode: "SERVICE_UNAVAILABLE",
+    message: "The backend service is currently unavailable",
+    detail: error.description default "",
+    correlationId: vars.correlationId default correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="HTTP:TIMEOUT" doc:name="Gateway Timeout 504">
+            <set-variable doc:name="Set HTTP Status" variableName="httpStatus" value="#[504]"/>
+            <set-variable doc:name="Set Headers" variableName="outboundHeaders"
+                           value="#[{'Content-Type': 'application/json'}]"/>
+            <ee:transform doc:name="Timeout Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    httpStatus: 504,
+    errorCode: "GATEWAY_TIMEOUT",
+    message: "The backend service did not respond in time",
+    detail: error.description default "",
+    correlationId: vars.correlationId default correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="ANY" doc:name="Internal Server Error 500">
+            <set-variable doc:name="Set HTTP Status" variableName="httpStatus" value="#[500]"/>
+            <set-variable doc:name="Set Headers" variableName="outboundHeaders"
+                           value="#[{'Content-Type': 'application/json'}]"/>
+            <logger doc:name="Log Unexpected Error" level="ERROR"
+                    message='#["[" ++ (vars.correlationId default "") ++ "] Unexpected error: " ++ error.description default "Unknown error"]'/>
+            <ee:transform doc:name="Internal Error Response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    httpStatus: 500,
+    errorCode: "INTERNAL_SERVER_ERROR",
+    message: "An unexpected error occurred",
+    detail: error.description default "Unknown error",
+    correlationId: vars.correlationId default correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+        </on-error-propagate>
+    </error-handler>
+</mule>

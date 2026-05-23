@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <flow name="sap-erp-sapi-main">
+        <http:listener doc:name="HTTP Listener" config-ref="sap-http-listener-config" path="/api/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+
+        <set-variable doc:name="Set Correlation ID" variableName="correlationId"
+                       value="#[attributes.headers.'x-correlation-id' default correlationId]"/>
+
+        <logger doc:name="Log Request" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] SAP SAPI Request: " ++ attributes.method ++ " " ++ attributes.requestPath]'/>
+
+        <apikit:router doc:name="APIKit Router" config-ref="sap-erp-api-config"/>
+
+        <logger doc:name="Log Response" level="INFO"
+                message='#["[" ++ vars.correlationId ++ "] SAP SAPI Response completed successfully"]'/>
+
+        <error-handler ref="global-error-handler"/>
+    </flow>
+
+    <flow name="sap-erp-sapi-console">
+        <http:listener doc:name="Console Listener" config-ref="sap-http-listener-config" path="/console/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+        </http:listener>
+        <apikit:console doc:name="APIKit Console" config-ref="sap-erp-api-config"/>
+    </flow>
+</mule>
