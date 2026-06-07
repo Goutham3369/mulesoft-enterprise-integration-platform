@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:jms="http://www.mulesoft.org/schema/mule/jms"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/jms http://www.mulesoft.org/schema/mule/jms/current/mule-jms.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!-- ======================== HTTP Listener Configuration ======================== -->
+    <http:listener-config name="order-papi-httpListenerConfig" doc:name="HTTP Listener Config">
+        <http:listener-connection host="${http.listener.host}" port="${http.listener.port}" />
+    </http:listener-config>
+
+    <!-- ======================== System API HTTP Request Configurations ======================== -->
+    <http:request-config name="sap-sapi-requestConfig" doc:name="SAP SAPI Request Config">
+        <http:request-connection host="${sap.sapi.host}" port="${sap.sapi.port}" protocol="HTTP">
+            <http:default-headers>
+                <http:default-header key="Content-Type" value="application/json" />
+                <http:default-header key="X-Correlation-Id" value="#[correlationId]" />
+            </http:default-headers>
+        </http:request-connection>
+    </http:request-config>
+
+    <http:request-config name="salesforce-sapi-requestConfig" doc:name="Salesforce SAPI Request Config">
+        <http:request-connection host="${salesforce.sapi.host}" port="${salesforce.sapi.port}" protocol="HTTP">
+            <http:default-headers>
+                <http:default-header key="Content-Type" value="application/json" />
+                <http:default-header key="X-Correlation-Id" value="#[correlationId]" />
+            </http:default-headers>
+        </http:request-connection>
+    </http:request-config>
+
+    <http:request-config name="inventory-sapi-requestConfig" doc:name="Inventory SAPI Request Config">
+        <http:request-connection host="${inventory.sapi.host}" port="${inventory.sapi.port}" protocol="HTTP">
+            <http:default-headers>
+                <http:default-header key="Content-Type" value="application/json" />
+                <http:default-header key="X-Correlation-Id" value="#[correlationId]" />
+            </http:default-headers>
+        </http:request-connection>
+    </http:request-config>
+
+    <http:request-config name="payment-sapi-requestConfig" doc:name="Payment SAPI Request Config">
+        <http:request-connection host="${payment.sapi.host}" port="${payment.sapi.port}" protocol="HTTP">
+            <http:default-headers>
+                <http:default-header key="Content-Type" value="application/json" />
+                <http:default-header key="X-Correlation-Id" value="#[correlationId]" />
+            </http:default-headers>
+        </http:request-connection>
+    </http:request-config>
+
+    <!-- ======================== JMS Configuration (ActiveMQ) ======================== -->
+    <jms:config name="activemq-config" doc:name="JMS Config">
+        <jms:active-mq-connection username="${jms.username}" password="${jms.password}">
+            <jms:factory-configuration brokerUrl="${jms.broker.url}" />
+        </jms:active-mq-connection>
+    </jms:config>
+
+    <!-- ======================== ObjectStore Configurations ======================== -->
+    <os:object-store name="saga-state-store"
+                     doc:name="Saga State ObjectStore"
+                     persistent="true"
+                     entryTtl="${saga.state.ttl}"
+                     entryTtlUnit="HOURS"
+                     maxEntries="${saga.state.max.entries}" />
+
+    <os:object-store name="customer-360-cache"
+                     doc:name="Customer 360 Cache ObjectStore"
+                     persistent="false"
+                     entryTtl="${customer360.cache.ttl}"
+                     entryTtlUnit="MINUTES"
+                     maxEntries="${customer360.cache.max.entries}" />
+
+    <os:object-store name="idempotency-store"
+                     doc:name="Idempotency ObjectStore"
+                     persistent="true"
+                     entryTtl="24"
+                     entryTtlUnit="HOURS"
+                     maxEntries="10000" />
+
+    <!-- ======================== Global Property Placeholders ======================== -->
+    <configuration-properties doc:name="Configuration Properties"
+                              file="properties/${mule.env}.yaml" />
+
+</mule>

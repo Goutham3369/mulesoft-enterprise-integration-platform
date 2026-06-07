@@ -1,0 +1,15 @@
+{
+  "minMuleVersion": "4.4.0",
+  "classLoaderModelLoaderDescriptor": {
+    "id": "mule",
+    "attributes": {
+      "exportedPackages": [],
+      "exportedResources": []
+    }
+  },
+  "secureProperties": [
+    "jms.username",
+    "jms.password",
+    "anypoint.platform.client_secret"
+  ]
+}

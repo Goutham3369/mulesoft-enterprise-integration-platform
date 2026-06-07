@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:jms="http://www.mulesoft.org/schema/mule/jms"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/jms http://www.mulesoft.org/schema/mule/jms/current/mule-jms.xsd">
+
+    <!-- ======================== Payment Processing Flow ======================== -->
+    <flow name="payment-processing-flow" doc:name="Payment Processing Orchestration">
+
+        <set-variable variableName="paymentRequest" value="#[payload]" doc:name="Store Payment Request" />
+        <set-variable variableName="paymentId" value="#[uuid()]" doc:name="Generate Payment ID" />
+        <set-variable variableName="retryCount" value="#[0]" doc:name="Initialize Retry Count" />
+
+        <logger level="INFO" doc:name="Log Payment Processing Start"
+                message="Starting payment processing | PaymentId: #[vars.paymentId] | OrderId: #[vars.paymentRequest.orderId] | Amount: #[vars.paymentRequest.amount] #[vars.paymentRequest.currency default 'USD'] | CorrelationId: #[correlationId]" />
+
+        <!-- Step 1: Build Authorization Request -->
+        <ee:transform doc:name="Build Payment Authorization Request">
+            <ee:message>
+                <ee:set-payload resource="dwl/payment-request-builder.dwl" />
+            </ee:message>
+        </ee:transform>
+
+        <!-- Step 2: Authorize Payment with Retry Logic -->
+        <until-successful maxRetries="${payment.auth.max.retries}"
+                           millisBetweenRetries="${payment.auth.retry.interval}"
+                           doc:name="Authorize Payment with Retries">
+            <http:request config-ref="payment-sapi-requestConfig" method="POST"
+                           path="/api/payments/authorize"
+                           doc:name="Authorize Payment via Payment SAPI">
+                <http:response-validator>
+                    <http:success-status-code-validator values="200,201" />
+                </http:response-validator>
+            </http:request>
+        </until-successful>
+
+        <set-variable variableName="authorizationResponse" value="#[payload]" doc:name="Store Authorization Response" />
+
+        <logger level="INFO" doc:name="Log Authorization Result"
+                message="Payment authorization result: #[vars.authorizationResponse.status] | AuthCode: #[vars.authorizationResponse.authorizationCode default 'N/A'] | PaymentId: #[vars.paymentId]" />
+
+        <!-- Step 3: Check Authorization Result -->
+        <choice doc:name="Check Authorization Status">
+            <when expression="#[vars.authorizationResponse.status == 'AUTHORIZED']">
+                <logger level="INFO" doc:name="Log Authorization Success"
+                        message="Payment authorized. Proceeding to capture | PaymentId: #[vars.paymentId]" />
+
+                <!-- Step 4: Capture Payment -->
+                <ee:transform doc:name="Build Capture Request">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    authorizationCode: vars.authorizationResponse.authorizationCode,
+    paymentId: vars.paymentId,
+    orderId: vars.paymentRequest.orderId,
+    amount: vars.paymentRequest.amount,
+    currency: vars.paymentRequest.currency default "USD",
+    captureType: "FULL",
+    capturedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    metadata: {
+        correlationId: correlationId,
+        source: "order-orchestration-papi"
+    }
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+
+                <until-successful maxRetries="${payment.capture.max.retries}"
+                                   millisBetweenRetries="${payment.capture.retry.interval}"
+                                   doc:name="Capture Payment with Retries">
+                    <http:request config-ref="payment-sapi-requestConfig" method="POST"
+                                   path="/api/payments/capture"
+                                   doc:name="Capture Payment via Payment SAPI" />
+                </until-successful>
+
+                <set-variable variableName="captureResponse" value="#[payload]" doc:name="Store Capture Response" />
+
+                <logger level="INFO" doc:name="Log Capture Result"
+                        message="Payment captured successfully | CaptureId: #[vars.captureResponse.captureId default 'N/A'] | PaymentId: #[vars.paymentId]" />
+
+                <!-- Step 5: Update Order with Payment Reference -->
+                <ee:transform doc:name="Build Order Payment Update">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    paymentId: vars.paymentId,
+    paymentStatus: "CAPTURED",
+    authorizationCode: vars.authorizationResponse.authorizationCode,
+    captureId: vars.captureResponse.captureId default "",
+    amount: vars.paymentRequest.amount,
+    currency: vars.paymentRequest.currency default "USD",
+    paymentMethod: vars.paymentRequest.paymentMethod default "CREDIT_CARD",
+    paidAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+
+                <http:request config-ref="sap-sapi-requestConfig" method="PUT"
+                               path="#['/api/orders/' ++ vars.paymentRequest.orderId ++ '/payment']"
+                               doc:name="Update Order Payment in SAP" />
+
+                <logger level="INFO" doc:name="Log Order Updated"
+                        message="Order updated with payment reference | OrderId: #[vars.paymentRequest.orderId] | PaymentId: #[vars.paymentId]" />
+
+                <!-- Publish payment event -->
+                <ee:transform doc:name="Build Payment Event">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    eventType: "payment-received",
+    eventId: uuid(),
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    correlationId: correlationId,
+    data: {
+        paymentId: vars.paymentId,
+        orderId: vars.paymentRequest.orderId,
+        customerId: vars.paymentRequest.customerId default "",
+        amount: vars.paymentRequest.amount,
+        currency: vars.paymentRequest.currency default "USD",
+        status: "CAPTURED",
+        paymentMethod: vars.paymentRequest.paymentMethod default "CREDIT_CARD"
+    }
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+
+                <jms:publish config-ref="activemq-config"
+                             destination="${jms.queue.order.events}"
+                             doc:name="Publish Payment Event">
+                    <jms:message>
+                        <jms:properties>#[output application/java --- {
+                            "eventType": "payment-received",
+                            "orderId": vars.paymentRequest.orderId,
+                            "correlationId": correlationId
+                        }]</jms:properties>
+                    </jms:message>
+                </jms:publish>
+
+                <!-- Build Success Response -->
+                <ee:transform doc:name="Build Payment Success Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: true,
+    data: {
+        paymentId: vars.paymentId,
+        orderId: vars.paymentRequest.orderId,
+        status: "CAPTURED",
+        authorizationCode: vars.authorizationResponse.authorizationCode,
+        captureId: vars.captureResponse.captureId default "",
+        amount: vars.paymentRequest.amount,
+        currency: vars.paymentRequest.currency default "USD",
+        paymentMethod: vars.paymentRequest.paymentMethod default "CREDIT_CARD",
+        processedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+    },
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+            </when>
+
+            <!-- Authorization Declined -->
+            <when expression="#[vars.authorizationResponse.status == 'DECLINED']">
+                <logger level="WARN" doc:name="Log Payment Declined"
+                        message="Payment declined | Reason: #[vars.authorizationResponse.declineReason default 'Unknown'] | PaymentId: #[vars.paymentId]" />
+                <ee:transform doc:name="Build Declined Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    data: {
+        paymentId: vars.paymentId,
+        orderId: vars.paymentRequest.orderId,
+        status: "DECLINED",
+        declineReason: vars.authorizationResponse.declineReason default "Payment was declined by the payment processor",
+        declineCode: vars.authorizationResponse.declineCode default "UNKNOWN"
+    },
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">422</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+
+            <!-- Unknown Authorization Status -->
+            <otherwise>
+                <logger level="ERROR" doc:name="Log Unknown Auth Status"
+                        message="Unknown authorization status: #[vars.authorizationResponse.status] | PaymentId: #[vars.paymentId]" />
+                <raise-error type="PAYMENT:UNKNOWN_STATUS"
+                             description="#['Unknown payment authorization status: ' ++ (vars.authorizationResponse.status default 'NULL')]" />
+            </otherwise>
+        </choice>
+
+        <!-- Error Handler -->
+        <error-handler>
+            <on-error-propagate type="MULE:RETRY_EXHAUSTED"
+                                doc:name="Handle Retry Exhausted">
+                <logger level="ERROR" doc:name="Log Retry Exhausted"
+                        message="Payment retries exhausted | PaymentId: #[vars.paymentId] | OrderId: #[vars.paymentRequest.orderId]" />
+                <ee:transform doc:name="Retry Exhausted Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    errorCode: "PAYMENT_RETRY_EXHAUSTED",
+    message: "Payment processing failed after multiple attempts. Please try again later.",
+    paymentId: vars.paymentId,
+    orderId: vars.paymentRequest.orderId default "",
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">502</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+
+            <on-error-propagate type="ANY"
+                                doc:name="Handle Payment Error">
+                <logger level="ERROR" doc:name="Log Payment Error"
+                        message="Payment processing error | PaymentId: #[vars.paymentId] | Error: #[error.description]" />
+                <ee:transform doc:name="Payment Error Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    errorCode: "PAYMENT_PROCESSING_FAILED",
+    message: "An error occurred during payment processing.",
+    detail: error.description default "Unknown payment error",
+    paymentId: vars.paymentId,
+    orderId: vars.paymentRequest.orderId default "",
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">500</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+</mule>

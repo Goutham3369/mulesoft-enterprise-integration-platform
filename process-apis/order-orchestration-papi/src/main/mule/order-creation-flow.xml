@@ -1,0 +1,372 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:jms="http://www.mulesoft.org/schema/mule/jms"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:validation="http://www.mulesoft.org/schema/mule/validation"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/jms http://www.mulesoft.org/schema/mule/jms/current/mule-jms.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mule/validation/current/mule-validation.xsd">
+
+    <!-- ======================== Order Creation Orchestration Flow ======================== -->
+    <flow name="order-creation-orchestration-flow" doc:name="Order Creation Orchestration">
+
+        <set-variable variableName="orderRequest" value="#[payload]" doc:name="Store Order Request" />
+        <set-variable variableName="sagaId" value="#[uuid()]" doc:name="Generate Saga ID" />
+
+        <logger level="INFO" doc:name="Log Order Creation Start"
+                message="Starting order creation orchestration | SagaId: #[vars.sagaId] | CorrelationId: #[correlationId]" />
+
+        <!-- Step 1: Validate Order Request -->
+        <flow-ref name="validate-order-request-subflow" doc:name="Validate Order Request" />
+
+        <!-- Step 2: Idempotency Check -->
+        <flow-ref name="idempotency-check-subflow" doc:name="Idempotency Check" />
+
+        <!-- Step 3: Parallel Customer Validation + Inventory Check -->
+        <scatter-gather doc:name="Parallel Validation">
+            <route>
+                <logger level="DEBUG" doc:name="Log Customer Validation Start"
+                        message="Starting customer validation for customerId: #[vars.orderRequest.customerId]" />
+                <http:request config-ref="salesforce-sapi-requestConfig" method="GET"
+                               path="#['/api/accounts/' ++ vars.orderRequest.customerId]"
+                               doc:name="Validate Customer via Salesforce SAPI">
+                    <http:response-validator>
+                        <http:success-status-code-validator values="200" />
+                    </http:response-validator>
+                </http:request>
+                <set-variable variableName="customerData" value="#[payload]" doc:name="Store Customer Data" />
+                <logger level="DEBUG" doc:name="Log Customer Validation Complete"
+                        message="Customer validated successfully: #[vars.orderRequest.customerId]" />
+            </route>
+            <route>
+                <logger level="DEBUG" doc:name="Log Inventory Check Start"
+                        message="Starting inventory check for #[sizeOf(vars.orderRequest.lineItems default [])] items" />
+                <ee:transform doc:name="Build Inventory Check Request">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    items: (vars.orderRequest.lineItems default []) map {
+        productId: $.productId,
+        requestedQuantity: $.quantity,
+        warehouseId: $.warehouseId default "WH-PRIMARY"
+    }
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+                <http:request config-ref="inventory-sapi-requestConfig" method="POST"
+                               path="/api/inventory/availability-check"
+                               doc:name="Check Inventory via Inventory SAPI" />
+                <set-variable variableName="inventoryStatus" value="#[payload]" doc:name="Store Inventory Status" />
+                <logger level="DEBUG" doc:name="Log Inventory Check Complete"
+                        message="Inventory check complete. All available: #[payload.allAvailable default false]" />
+            </route>
+        </scatter-gather>
+
+        <!-- Extract results from scatter-gather -->
+        <ee:transform doc:name="Extract Parallel Results">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    customerValid: true,
+    inventoryAvailable: payload."1".payload.allAvailable default false,
+    unavailableItems: payload."1".payload.unavailableItems default []
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <!-- Validate parallel results -->
+        <choice doc:name="Check Validation Results">
+            <when expression="#[not (payload.inventoryAvailable default false)]">
+                <logger level="WARN" doc:name="Log Insufficient Inventory"
+                        message="Insufficient inventory for order | SagaId: #[vars.sagaId]" />
+                <raise-error doc:name="Raise Inventory Error"
+                             type="ORDER:INSUFFICIENT_INVENTORY"
+                             description="One or more items have insufficient inventory" />
+            </when>
+        </choice>
+
+        <!-- Step 4: Create Order in SAP -->
+        <logger level="INFO" doc:name="Log SAP Order Creation"
+                message="Creating order in SAP | SagaId: #[vars.sagaId]" />
+        <ee:transform doc:name="Build SAP Order Request">
+            <ee:message>
+                <ee:set-payload resource="dwl/order-orchestration-transform.dwl" />
+            </ee:message>
+        </ee:transform>
+
+        <http:request config-ref="sap-sapi-requestConfig" method="POST"
+                       path="/api/orders"
+                       doc:name="Create Order in SAP SAPI" />
+
+        <set-variable variableName="sapOrderId" value="#[payload.orderId]" doc:name="Store SAP Order ID" />
+        <set-variable variableName="sapOrderResponse" value="#[payload]" doc:name="Store SAP Order Response" />
+
+        <logger level="INFO" doc:name="Log SAP Order Created"
+                message="Order created in SAP: #[vars.sapOrderId] | SagaId: #[vars.sagaId]" />
+
+        <!-- Step 5: Reserve Inventory -->
+        <logger level="INFO" doc:name="Log Inventory Reservation"
+                message="Reserving inventory for order: #[vars.sapOrderId]" />
+        <ee:transform doc:name="Build Inventory Reservation Request">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    orderId: vars.sapOrderId,
+    reservationId: uuid(),
+    items: (vars.orderRequest.lineItems default []) map {
+        productId: $.productId,
+        quantity: $.quantity,
+        warehouseId: $.warehouseId default "WH-PRIMARY"
+    },
+    expiresAt: (now() + |PT2H|) as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <http:request config-ref="inventory-sapi-requestConfig" method="POST"
+                       path="/api/inventory/reservations"
+                       doc:name="Reserve Inventory via Inventory SAPI" />
+
+        <set-variable variableName="reservationId" value="#[payload.reservationId]" doc:name="Store Reservation ID" />
+
+        <logger level="INFO" doc:name="Log Inventory Reserved"
+                message="Inventory reserved: #[vars.reservationId] for order: #[vars.sapOrderId]" />
+
+        <!-- Step 6: Publish order-created event to JMS -->
+        <ee:transform doc:name="Build Order Created Event">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    eventType: "order-created",
+    eventId: uuid(),
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    correlationId: correlationId,
+    data: {
+        orderId: vars.sapOrderId,
+        customerId: vars.orderRequest.customerId,
+        reservationId: vars.reservationId,
+        orderTotal: vars.sapOrderResponse.orderTotal default 0,
+        lineItems: vars.orderRequest.lineItems default [],
+        status: "CREATED",
+        createdAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+    }
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <jms:publish config-ref="activemq-config"
+                     destination="${jms.queue.order.events}"
+                     doc:name="Publish Order Created Event">
+            <jms:message>
+                <jms:properties>#[output application/java --- {
+                    "eventType": "order-created",
+                    "orderId": vars.sapOrderId,
+                    "correlationId": correlationId
+                }]</jms:properties>
+            </jms:message>
+        </jms:publish>
+
+        <logger level="INFO" doc:name="Log Event Published"
+                message="Order created event published to JMS | OrderId: #[vars.sapOrderId]" />
+
+        <!-- Step 7: Build Order Confirmation Response -->
+        <ee:transform doc:name="Build Order Confirmation">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: true,
+    data: {
+        orderId: vars.sapOrderId,
+        status: "CREATED",
+        customerId: vars.orderRequest.customerId,
+        reservationId: vars.reservationId,
+        orderTotal: vars.sapOrderResponse.orderTotal default 0,
+        currency: vars.orderRequest.currency default "USD",
+        lineItems: (vars.orderRequest.lineItems default []) map {
+            productId: $.productId,
+            productName: $.productName default "",
+            quantity: $.quantity,
+            unitPrice: $.unitPrice,
+            lineTotal: $.quantity * $.unitPrice
+        },
+        estimatedDelivery: (now() + |P5D|) as String {format: "yyyy-MM-dd"},
+        createdAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+    },
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <!-- Error Handling with Compensation -->
+        <error-handler>
+            <on-error-propagate type="ORDER:INSUFFICIENT_INVENTORY"
+                                doc:name="Handle Insufficient Inventory">
+                <logger level="WARN" doc:name="Log Inventory Shortage"
+                        message="Order creation failed: insufficient inventory | SagaId: #[vars.sagaId]" />
+                <ee:transform doc:name="Insufficient Inventory Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    errorCode: "INSUFFICIENT_INVENTORY",
+    message: "One or more items in the order have insufficient inventory.",
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">422</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+
+            <on-error-propagate type="ANY"
+                                doc:name="Compensation on Failure">
+                <logger level="ERROR" doc:name="Log Order Creation Failure"
+                        message="Order creation failed, initiating compensation | SagaId: #[vars.sagaId] | Error: #[error.description]" />
+
+                <!-- Compensate: Release Inventory Reservation (if reservation was made) -->
+                <choice doc:name="Check if Reservation Exists">
+                    <when expression="#[vars.reservationId != null]">
+                        <try doc:name="Compensate Inventory Reservation">
+                            <http:request config-ref="inventory-sapi-requestConfig" method="DELETE"
+                                           path="#['/api/inventory/reservations/' ++ vars.reservationId]"
+                                           doc:name="Release Inventory Reservation" />
+                            <logger level="INFO" doc:name="Log Reservation Released"
+                                    message="Compensated: inventory reservation released: #[vars.reservationId]" />
+                            <error-handler>
+                                <on-error-continue type="ANY" doc:name="Log Compensation Failure">
+                                    <logger level="ERROR" doc:name="Log Compensation Error"
+                                            message="COMPENSATION FAILED: Unable to release inventory reservation: #[vars.reservationId] | Error: #[error.description]" />
+                                </on-error-continue>
+                            </error-handler>
+                        </try>
+                    </when>
+                </choice>
+
+                <!-- Compensate: Cancel SAP Order (if order was created) -->
+                <choice doc:name="Check if SAP Order Exists">
+                    <when expression="#[vars.sapOrderId != null]">
+                        <try doc:name="Compensate SAP Order">
+                            <http:request config-ref="sap-sapi-requestConfig" method="PUT"
+                                           path="#['/api/orders/' ++ vars.sapOrderId ++ '/status']"
+                                           doc:name="Cancel SAP Order">
+                                <http:body><![CDATA[#[output application/json --- { status: "CANCELLED", reason: "Compensation due to orchestration failure" }]]]></http:body>
+                            </http:request>
+                            <logger level="INFO" doc:name="Log SAP Order Cancelled"
+                                    message="Compensated: SAP order cancelled: #[vars.sapOrderId]" />
+                            <error-handler>
+                                <on-error-continue type="ANY" doc:name="Log SAP Compensation Failure">
+                                    <logger level="ERROR" doc:name="Log SAP Compensation Error"
+                                            message="COMPENSATION FAILED: Unable to cancel SAP order: #[vars.sapOrderId] | Error: #[error.description]" />
+                                </on-error-continue>
+                            </error-handler>
+                        </try>
+                    </when>
+                </choice>
+
+                <ee:transform doc:name="Build Error Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    errorCode: "ORDER_CREATION_FAILED",
+    message: "Order creation failed. All operations have been rolled back.",
+    detail: error.description default "Unknown error",
+    sagaId: vars.sagaId,
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">500</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <!-- ======================== Validate Order Request Sub-Flow ======================== -->
+    <sub-flow name="validate-order-request-subflow" doc:name="Validate Order Request">
+        <validation:is-not-null value="#[vars.orderRequest.customerId]"
+                                 doc:name="Validate Customer ID"
+                                 message="Customer ID is required" />
+        <validation:is-not-null value="#[vars.orderRequest.lineItems]"
+                                 doc:name="Validate Line Items"
+                                 message="Line items are required" />
+        <validation:validate-size value="#[vars.orderRequest.lineItems default []]"
+                                   min="1" max="100"
+                                   doc:name="Validate Line Items Count"
+                                   message="Order must contain between 1 and 100 line items" />
+        <foreach collection="#[vars.orderRequest.lineItems]" doc:name="Validate Each Line Item">
+            <validation:is-not-null value="#[payload.productId]"
+                                     doc:name="Validate Product ID"
+                                     message="Product ID is required for all line items" />
+            <validation:is-true expression="#[(payload.quantity default 0) > 0]"
+                                 doc:name="Validate Quantity"
+                                 message="Quantity must be greater than zero" />
+            <validation:is-true expression="#[(payload.unitPrice default 0) > 0]"
+                                 doc:name="Validate Unit Price"
+                                 message="Unit price must be greater than zero" />
+        </foreach>
+        <logger level="DEBUG" doc:name="Log Validation Passed"
+                message="Order request validation passed" />
+    </sub-flow>
+
+    <!-- ======================== Idempotency Check Sub-Flow ======================== -->
+    <sub-flow name="idempotency-check-subflow" doc:name="Idempotency Check">
+        <choice doc:name="Check Idempotency Key">
+            <when expression="#[attributes.headers['X-Idempotency-Key'] != null]">
+                <set-variable variableName="idempotencyKey" value="#[attributes.headers['X-Idempotency-Key']]"
+                              doc:name="Store Idempotency Key" />
+                <try doc:name="Check Idempotency Store">
+                    <os:retrieve key="#[vars.idempotencyKey]"
+                                 objectStore="idempotency-store"
+                                 doc:name="Check Existing Request" />
+                    <logger level="WARN" doc:name="Log Duplicate Request"
+                            message="Duplicate request detected: #[vars.idempotencyKey]" />
+                    <raise-error type="OS:KEY_ALREADY_EXISTS"
+                                 description="Duplicate request detected" />
+                    <error-handler>
+                        <on-error-continue type="OS:KEY_NOT_FOUND" doc:name="Key Not Found - Proceed">
+                            <logger level="DEBUG" doc:name="Log New Request"
+                                    message="Idempotency check passed. New request: #[vars.idempotencyKey]" />
+                            <os:store key="#[vars.idempotencyKey]"
+                                      objectStore="idempotency-store"
+                                      doc:name="Store Idempotency Key">
+                                <os:value><![CDATA[#[output application/json --- { processedAt: now() as String, correlationId: correlationId }]]]></os:value>
+                            </os:store>
+                        </on-error-continue>
+                    </error-handler>
+                </try>
+            </when>
+            <otherwise>
+                <logger level="DEBUG" doc:name="Log No Idempotency Key"
+                        message="No idempotency key provided, proceeding without duplicate check" />
+            </otherwise>
+        </choice>
+    </sub-flow>
+
+</mule>

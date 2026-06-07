@@ -1,0 +1,246 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:jms="http://www.mulesoft.org/schema/mule/jms"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/jms http://www.mulesoft.org/schema/mule/jms/current/mule-jms.xsd">
+
+    <!-- ======================== Order Fulfillment Orchestration Flow ======================== -->
+    <flow name="order-fulfillment-orchestration-flow" doc:name="Order Fulfillment Orchestration">
+
+        <set-variable variableName="fulfillmentRequest" value="#[payload]" doc:name="Store Fulfillment Request" />
+
+        <logger level="INFO" doc:name="Log Fulfillment Start"
+                message="Starting order fulfillment | OrderId: #[vars.orderId] | CorrelationId: #[correlationId]" />
+
+        <!-- Step 1: Verify Payment Status -->
+        <logger level="INFO" doc:name="Log Payment Verification"
+                message="Verifying payment status for order: #[vars.orderId]" />
+
+        <http:request config-ref="payment-sapi-requestConfig" method="GET"
+                       path="#['/api/payments/order/' ++ vars.orderId]"
+                       doc:name="Get Payment Status" />
+
+        <set-variable variableName="paymentStatus" value="#[payload]" doc:name="Store Payment Status" />
+
+        <choice doc:name="Check Payment Status">
+            <when expression="#[vars.paymentStatus.status != 'CAPTURED' and vars.paymentStatus.status != 'AUTHORIZED']">
+                <logger level="WARN" doc:name="Log Payment Not Ready"
+                        message="Payment not ready for fulfillment | OrderId: #[vars.orderId] | PaymentStatus: #[vars.paymentStatus.status]" />
+                <raise-error type="ORDER:PAYMENT_NOT_READY"
+                             description="#['Payment status is ' ++ (vars.paymentStatus.status default 'UNKNOWN') ++ '. Payment must be CAPTURED or AUTHORIZED before fulfillment.']" />
+            </when>
+        </choice>
+
+        <logger level="INFO" doc:name="Log Payment Verified"
+                message="Payment verified: #[vars.paymentStatus.status] | OrderId: #[vars.orderId]" />
+
+        <!-- Step 2: Trigger Warehouse Picking via Inventory SAPI -->
+        <logger level="INFO" doc:name="Log Warehouse Picking"
+                message="Triggering warehouse picking for order: #[vars.orderId]" />
+
+        <ee:transform doc:name="Build Warehouse Picking Request">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    orderId: vars.orderId,
+    warehouseId: vars.fulfillmentRequest.warehouseId default "WH-PRIMARY",
+    priority: vars.fulfillmentRequest.priority default "NORMAL",
+    pickingInstructions: {
+        method: vars.fulfillmentRequest.shippingMethod default "STANDARD",
+        specialInstructions: vars.fulfillmentRequest.specialInstructions default "",
+        requestedShipDate: vars.fulfillmentRequest.requestedShipDate default ((now() + |P1D|) as String {format: "yyyy-MM-dd"})
+    },
+    initiatedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    correlationId: correlationId
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <http:request config-ref="inventory-sapi-requestConfig" method="POST"
+                       path="/api/inventory/warehouse/pick"
+                       doc:name="Trigger Warehouse Picking" />
+
+        <set-variable variableName="pickingResponse" value="#[payload]" doc:name="Store Picking Response" />
+
+        <logger level="INFO" doc:name="Log Picking Initiated"
+                message="Warehouse picking initiated | PickingId: #[vars.pickingResponse.pickingId default 'N/A'] | OrderId: #[vars.orderId]" />
+
+        <!-- Step 3: Update Order Status in SAP -->
+        <logger level="INFO" doc:name="Log SAP Status Update"
+                message="Updating order status to FULFILLING in SAP | OrderId: #[vars.orderId]" />
+
+        <ee:transform doc:name="Build SAP Status Update">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    status: "FULFILLING",
+    fulfillmentDetails: {
+        pickingId: vars.pickingResponse.pickingId default "",
+        warehouseId: vars.fulfillmentRequest.warehouseId default "WH-PRIMARY",
+        shippingMethod: vars.fulfillmentRequest.shippingMethod default "STANDARD",
+        estimatedShipDate: vars.pickingResponse.estimatedShipDate default ((now() + |P1D|) as String {format: "yyyy-MM-dd"}),
+        estimatedDeliveryDate: vars.pickingResponse.estimatedDeliveryDate default ((now() + |P5D|) as String {format: "yyyy-MM-dd"})
+    },
+    updatedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    updatedBy: "order-orchestration-papi"
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <http:request config-ref="sap-sapi-requestConfig" method="PUT"
+                       path="#['/api/orders/' ++ vars.orderId ++ '/status']"
+                       doc:name="Update Order Status in SAP" />
+
+        <set-variable variableName="sapUpdateResponse" value="#[payload]" doc:name="Store SAP Update Response" />
+
+        <!-- Step 4: Update Opportunity in Salesforce -->
+        <logger level="INFO" doc:name="Log Salesforce Update"
+                message="Updating opportunity in Salesforce for order: #[vars.orderId]" />
+
+        <ee:transform doc:name="Build Salesforce Opportunity Update">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    orderId: vars.orderId,
+    stage: "Closed Won - Fulfilling",
+    fulfillmentStatus: "IN_PROGRESS",
+    fulfillmentInitiatedDate: now() as String {format: "yyyy-MM-dd"},
+    pickingId: vars.pickingResponse.pickingId default "",
+    lastModifiedBy: "order-orchestration-papi",
+    lastModifiedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <http:request config-ref="salesforce-sapi-requestConfig" method="PUT"
+                       path="#['/api/opportunities/order/' ++ vars.orderId]"
+                       doc:name="Update Salesforce Opportunity" />
+
+        <!-- Step 5: Send Fulfillment Notification Event -->
+        <ee:transform doc:name="Build Fulfillment Event">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    eventType: "order-fulfilled",
+    eventId: uuid(),
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+    correlationId: correlationId,
+    data: {
+        orderId: vars.orderId,
+        customerId: vars.fulfillmentRequest.customerId default "",
+        pickingId: vars.pickingResponse.pickingId default "",
+        warehouseId: vars.fulfillmentRequest.warehouseId default "WH-PRIMARY",
+        shippingMethod: vars.fulfillmentRequest.shippingMethod default "STANDARD",
+        status: "FULFILLING",
+        estimatedDeliveryDate: vars.pickingResponse.estimatedDeliveryDate default ((now() + |P5D|) as String {format: "yyyy-MM-dd"})
+    }
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <jms:publish config-ref="activemq-config"
+                     destination="${jms.queue.order.events}"
+                     doc:name="Publish Fulfillment Event">
+            <jms:message>
+                <jms:properties>#[output application/java --- {
+                    "eventType": "order-fulfilled",
+                    "orderId": vars.orderId,
+                    "correlationId": correlationId
+                }]</jms:properties>
+            </jms:message>
+        </jms:publish>
+
+        <logger level="INFO" doc:name="Log Fulfillment Complete"
+                message="Order fulfillment orchestration complete | OrderId: #[vars.orderId]" />
+
+        <!-- Build Final Response -->
+        <ee:transform doc:name="Build Fulfillment Response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: true,
+    data: {
+        orderId: vars.orderId,
+        status: "FULFILLING",
+        pickingId: vars.pickingResponse.pickingId default "",
+        warehouseId: vars.fulfillmentRequest.warehouseId default "WH-PRIMARY",
+        shippingMethod: vars.fulfillmentRequest.shippingMethod default "STANDARD",
+        estimatedShipDate: vars.pickingResponse.estimatedShipDate default ((now() + |P1D|) as String {format: "yyyy-MM-dd"}),
+        estimatedDeliveryDate: vars.pickingResponse.estimatedDeliveryDate default ((now() + |P5D|) as String {format: "yyyy-MM-dd"}),
+        paymentStatus: vars.paymentStatus.status default "VERIFIED",
+        fulfillmentInitiatedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+    },
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <!-- Error Handler -->
+        <error-handler>
+            <on-error-propagate type="ORDER:PAYMENT_NOT_READY"
+                                doc:name="Handle Payment Not Ready">
+                <ee:transform doc:name="Payment Not Ready Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    errorCode: "PAYMENT_NOT_READY",
+    message: error.description,
+    orderId: vars.orderId,
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">422</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+
+            <on-error-propagate type="ANY"
+                                doc:name="Handle Fulfillment Error">
+                <logger level="ERROR" doc:name="Log Fulfillment Error"
+                        message="Order fulfillment failed | OrderId: #[vars.orderId] | Error: #[error.description]" />
+                <ee:transform doc:name="Fulfillment Error Response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: false,
+    errorCode: "FULFILLMENT_FAILED",
+    message: "Order fulfillment failed. Please contact support.",
+    detail: error.description default "Unknown fulfillment error",
+    orderId: vars.orderId,
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">500</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+</mule>

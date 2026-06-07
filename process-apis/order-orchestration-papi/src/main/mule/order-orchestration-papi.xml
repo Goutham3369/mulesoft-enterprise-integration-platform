@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd">
+
+    <!-- ======================== Main APIKit Router Flow ======================== -->
+    <flow name="order-orchestration-papi-main" doc:name="Order Orchestration PAPI Main Flow">
+        <http:listener config-ref="order-papi-httpListenerConfig"
+                       path="/api/*"
+                       doc:name="HTTP Listener - Port 8085" />
+
+        <logger level="INFO" doc:name="Log Incoming Request"
+                message="PAPI Request: #[attributes.method] #[attributes.requestPath] | CorrelationId: #[correlationId] | ClientIP: #[attributes.remoteAddress]" />
+
+        <set-variable variableName="requestTimestamp" value="#[now()]" doc:name="Set Request Timestamp" />
+
+        <apikit:router doc:name="APIKit Router" />
+
+        <logger level="INFO" doc:name="Log Response Sent"
+                message="PAPI Response sent | CorrelationId: #[correlationId] | Duration: #[(now() - vars.requestTimestamp) as Number {unit: 'milliseconds'}]ms" />
+
+        <error-handler ref="global-error-handler" />
+    </flow>
+
+    <!-- ======================== POST /orders ======================== -->
+    <flow name="post:\orders:order-orchestration-papi-config" doc:name="POST /orders">
+        <logger level="INFO" doc:name="Log Create Order Request"
+                message="Creating new order | CorrelationId: #[correlationId]" />
+        <flow-ref name="order-creation-orchestration-flow" doc:name="Order Creation Orchestration" />
+    </flow>
+
+    <!-- ======================== GET /orders ======================== -->
+    <flow name="get:\orders:order-orchestration-papi-config" doc:name="GET /orders">
+        <logger level="INFO" doc:name="Log Get Orders Request"
+                message="Retrieving orders | CorrelationId: #[correlationId]" />
+
+        <set-variable variableName="queryParams" value="#[attributes.queryParams]" doc:name="Store Query Params" />
+
+        <http:request config-ref="sap-sapi-requestConfig" method="GET" path="/api/orders" doc:name="Get Orders from SAP">
+            <http:query-params><![CDATA[#[output application/java --- vars.queryParams]]]></http:query-params>
+        </http:request>
+
+        <ee:transform doc:name="Transform Order List Response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: true,
+    data: payload.orders default [],
+    pagination: {
+        page: vars.queryParams.page default 1,
+        pageSize: vars.queryParams.pageSize default 20,
+        totalRecords: payload.totalRecords default 0,
+        totalPages: ceil((payload.totalRecords default 0) / (vars.queryParams.pageSize default 20))
+    },
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+    <!-- ======================== GET /orders/{orderId} ======================== -->
+    <flow name="get:\orders\(orderId):order-orchestration-papi-config" doc:name="GET /orders/{orderId}">
+        <logger level="INFO" doc:name="Log Get Order Detail"
+                message="Retrieving order detail: #[attributes.uriParams.orderId] | CorrelationId: #[correlationId]" />
+
+        <set-variable variableName="orderId" value="#[attributes.uriParams.orderId]" doc:name="Store Order ID" />
+
+        <http:request config-ref="sap-sapi-requestConfig" method="GET"
+                       path="#['/api/orders/' ++ vars.orderId]"
+                       doc:name="Get Order from SAP" />
+
+        <ee:transform doc:name="Transform Order Detail Response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: true,
+    data: payload,
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+    <!-- ======================== POST /orders/{orderId}/fulfill ======================== -->
+    <flow name="post:\orders\(orderId)\fulfill:order-orchestration-papi-config" doc:name="POST /orders/{orderId}/fulfill">
+        <logger level="INFO" doc:name="Log Fulfillment Request"
+                message="Fulfilling order: #[attributes.uriParams.orderId] | CorrelationId: #[correlationId]" />
+
+        <set-variable variableName="orderId" value="#[attributes.uriParams.orderId]" doc:name="Store Order ID" />
+        <flow-ref name="order-fulfillment-orchestration-flow" doc:name="Order Fulfillment Orchestration" />
+    </flow>
+
+    <!-- ======================== GET /customers/{customerId}/360 ======================== -->
+    <flow name="get:\customers\(customerId)\360:order-orchestration-papi-config" doc:name="GET /customers/{customerId}/360">
+        <logger level="INFO" doc:name="Log Customer 360 Request"
+                message="Customer 360 lookup: #[attributes.uriParams.customerId] | CorrelationId: #[correlationId]" />
+
+        <set-variable variableName="customerId" value="#[attributes.uriParams.customerId]" doc:name="Store Customer ID" />
+        <flow-ref name="customer-360-aggregation-flow" doc:name="Customer 360 Aggregation" />
+    </flow>
+
+    <!-- ======================== POST /payments ======================== -->
+    <flow name="post:\payments:order-orchestration-papi-config" doc:name="POST /payments">
+        <logger level="INFO" doc:name="Log Payment Request"
+                message="Processing payment | CorrelationId: #[correlationId]" />
+        <flow-ref name="payment-processing-flow" doc:name="Payment Processing" />
+    </flow>
+
+    <!-- ======================== POST /orders/{orderId}/cancel ======================== -->
+    <flow name="post:\orders\(orderId)\cancel:order-orchestration-papi-config" doc:name="POST /orders/{orderId}/cancel">
+        <logger level="INFO" doc:name="Log Order Cancellation"
+                message="Cancelling order: #[attributes.uriParams.orderId] | CorrelationId: #[correlationId]" />
+
+        <set-variable variableName="orderId" value="#[attributes.uriParams.orderId]" doc:name="Store Order ID" />
+
+        <http:request config-ref="sap-sapi-requestConfig" method="PUT"
+                       path="#['/api/orders/' ++ vars.orderId ++ '/status']"
+                       doc:name="Cancel Order in SAP">
+            <http:body><![CDATA[#[output application/json --- { status: "CANCELLED", reason: payload.reason default "Customer requested cancellation", cancelledAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"} }]]]></http:body>
+        </http:request>
+
+        <ee:transform doc:name="Build Cancellation Event">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    success: true,
+    data: {
+        orderId: vars.orderId,
+        status: "CANCELLED",
+        cancelledAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+    },
+    correlationId: correlationId,
+    timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"}
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+</mule>
