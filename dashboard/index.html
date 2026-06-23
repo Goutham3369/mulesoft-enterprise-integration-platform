@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MuleSoft Enterprise Integration Platform - Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header class="glass-panel">
+        <div class="logo">🚀 MuleSoft EIP Dashboard</div>
+        <div class="env-selector">
+            <select id="envSelect">
+                <option value="DEV">DEV</option>
+                <option value="STAGING">STAGING</option>
+                <option value="PROD">PROD</option>
+            </select>
+            <span class="bell">🔔</span>
+        </div>
+    </header>
+
+    <main>
+        <section class="kpi-cards">
+            <div class="card glass-panel">
+                <h3>Total API Calls</h3>
+                <div class="value" id="kpi-calls">1,245,302</div>
+                <div class="sparkline calls-spark"></div>
+            </div>
+            <div class="card glass-panel">
+                <h3>Avg Response Time</h3>
+                <div class="value">245ms</div>
+                <div class="sparkline time-spark"></div>
+            </div>
+            <div class="card glass-panel">
+                <h3>Error Rate</h3>
+                <div class="value error-text">0.45%</div>
+                <div class="sparkline error-spark"></div>
+            </div>
+            <div class="card glass-panel">
+                <h3>Active Integrations</h3>
+                <div class="value">6/6</div>
+                <div class="sparkline ok-spark"></div>
+            </div>
+        </section>
+
+        <section class="api-health">
+            <h2>API Health</h2>
+            <div class="grid">
+                <div class="api-card glass-panel">
+                    <div class="status-indicator pulse-green"></div>
+                    <h4>SAP ERP</h4>
+                    <p>Req: 45k | Err: 12</p>
+                    <p class="small">Last check: Just now</p>
+                </div>
+                <div class="api-card glass-panel">
+                    <div class="status-indicator pulse-green"></div>
+                    <h4>Salesforce CRM</h4>
+                    <p>Req: 32k | Err: 5</p>
+                    <p class="small">Last check: Just now</p>
+                </div>
+                <div class="api-card glass-panel">
+                    <div class="status-indicator pulse-yellow"></div>
+                    <h4>Payment Gateway</h4>
+                    <p>Req: 15k | Err: 42</p>
+                    <p class="small">Last check: 1m ago</p>
+                </div>
+                <div class="api-card glass-panel">
+                    <div class="status-indicator pulse-green"></div>
+                    <h4>Inventory Mgmt</h4>
+                    <p>Req: 89k | Err: 2</p>
+                    <p class="small">Last check: Just now</p>
+                </div>
+                <div class="api-card glass-panel">
+                    <div class="status-indicator pulse-green"></div>
+                    <h4>Order Orchestration</h4>
+                    <p>Req: 22k | Err: 8</p>
+                    <p class="small">Last check: Just now</p>
+                </div>
+                <div class="api-card glass-panel">
+                    <div class="status-indicator pulse-green"></div>
+                    <h4>Order Experience</h4>
+                    <p>Req: 41k | Err: 0</p>
+                    <p class="small">Last check: Just now</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="order-flow glass-panel">
+            <h2>Live Order Flow Visualization</h2>
+            <div class="flow-diagram">
+                <div class="node active">Received</div>
+                <div class="arrow">➔</div>
+                <div class="node active">Validated</div>
+                <div class="arrow">➔</div>
+                <div class="node active">Inventory Reserved</div>
+                <div class="arrow">➔</div>
+                <div class="node pending">Payment Processed</div>
+                <div class="arrow">➔</div>
+                <div class="node pending">Fulfilled</div>
+                <div class="arrow">➔</div>
+                <div class="node pending">Shipped</div>
+            </div>
+        </section>
+        
+        <div class="charts-row">
+            <section class="chart-container glass-panel">
+                <h2>Error Distribution</h2>
+                <div class="donut-chart"></div>
+                <div class="legend">
+                    <div><span style="background: #ffa726"></span> 400 Bad Request</div>
+                    <div><span style="background: #ef5350"></span> 500 Internal</div>
+                    <div><span style="background: #00d4ff"></span> 404 Not Found</div>
+                </div>
+            </section>
+            
+            <section class="chart-container glass-panel">
+                <h2>API Calls Over Time</h2>
+                <div class="bar-chart">
+                    <div class="bar" style="height: 40%"></div>
+                    <div class="bar" style="height: 60%"></div>
+                    <div class="bar" style="height: 80%"></div>
+                    <div class="bar" style="height: 50%"></div>
+                    <div class="bar" style="height: 90%"></div>
+                    <div class="bar" style="height: 100%"></div>
+                    <div class="bar" style="height: 70%"></div>
+                </div>
+            </section>
+        </div>
+
+        <section class="transactions glass-panel">
+            <h2>Recent Transactions</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Order ID</th>
+                        <th>Customer</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                        <th>Timestamp</th>
+                    </tr>
+                </thead>
+                <tbody id="txTable">
+                    <tr>
+                        <td>ORD-001</td>
+                        <td>Acme Corp</td>
+                        <td>,200.00</td>
+                        <td><span class="badge badge-success">Processed</span></td>
+                        <td>2026-06-27 10:45:00</td>
+                    </tr>
+                    <tr>
+                        <td>ORD-002</td>
+                        <td>Globex</td>
+                        <td>.00</td>
+                        <td><span class="badge badge-warning">Pending</span></td>
+                        <td>2026-06-27 10:46:12</td>
+                    </tr>
+                    <tr>
+                        <td>ORD-003</td>
+                        <td>Initech</td>
+                        <td>,400.00</td>
+                        <td><span class="badge badge-error">Failed</span></td>
+                        <td>2026-06-27 10:48:33</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+    </main>
+
+    <footer class="glass-panel">
+        <p>MuleSoft Enterprise Integration Platform v1.0.0 | <a href="#">Documentation</a> | <a href="#">GitHub</a></p>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
