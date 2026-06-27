@@ -6,40 +6,40 @@
 # ============================================================
 
 # Global owners — fallback for any unmatched path
-*                                               @platform-team @tech-leads
+*                                               @Goutham3369
 
 # ---- Shared Libraries ----
-/shared-libraries/                              @platform-team @integration-architects
+/shared-libraries/                              @Goutham3369
 
 # ---- System APIs ----
-/system-apis/sap-erp-sapi/                      @erp-team @platform-team
-/system-apis/salesforce-crm-sapi/               @crm-team @platform-team
-/system-apis/payment-gateway-sapi/              @payments-team @platform-team @security-team
-/system-apis/inventory-mgmt-sapi/               @supply-chain-team @platform-team
+/system-apis/sap-erp-sapi/                      @Goutham3369
+/system-apis/salesforce-crm-sapi/               @Goutham3369
+/system-apis/payment-gateway-sapi/              @Goutham3369
+/system-apis/inventory-mgmt-sapi/               @Goutham3369
 
 # ---- Process APIs ----
-/process-apis/order-orchestration-papi/         @order-management-team @integration-architects
+/process-apis/order-orchestration-papi/         @Goutham3369
 
 # ---- Experience APIs ----
-/experience-apis/order-experience-eapi/         @frontend-team @api-designers
+/experience-apis/order-experience-eapi/         @Goutham3369
 
 # ---- API Specifications (RAML) ----
-**/api-spec/**                                  @api-designers @integration-architects
-**/*.raml                                       @api-designers @integration-architects
+**/api-spec/**                                  @Goutham3369
+**/*.raml                                       @Goutham3369
 
 # ---- Infrastructure & DevOps ----
-/.github/                                       @devops-team @platform-team
-/docker-compose.yml                             @devops-team
-/docker/                                        @devops-team
-/monitoring/                                    @sre-team @devops-team
+/.github/                                       @Goutham3369
+/docker-compose.yml                             @Goutham3369
+/docker/                                        @Goutham3369
+/monitoring/                                    @Goutham3369
 
 # ---- Security-sensitive files ----
-**/common-security.xml                          @security-team @platform-team
-**/*secret*                                     @security-team
-**/*credential*                                 @security-team
-**/secure-properties/**                         @security-team @platform-team
+**/common-security.xml                          @Goutham3369
+**/*secret*                                     @Goutham3369
+**/*credential*                                 @Goutham3369
+**/secure-properties/**                         @Goutham3369
 
 # ---- Configuration ----
-**/*.properties                                 @platform-team
-**/*.yaml                                       @platform-team
-**/pom.xml                                      @platform-team @tech-leads
+**/*.properties                                 @Goutham3369
+**/*.yaml                                       @Goutham3369
+**/pom.xml                                      @Goutham3369
